@@ -36,6 +36,7 @@ STATUS_STYLE = {  # 판정: (켜는 등, 글자색)
     "불가": ("red", ANDON["red"]),
     "확인 불가": (None, "#6B7785"),
 }
+DETAIL_BG = "#F2F4F7"     # 도구별 세부내용 영역 바탕
 CHAT_BG = "#B2C7DA"       # 카카오톡 대화방 배경
 USER_BUBBLE = "#FEE500"   # 내 말풍선
 AGENT_BUBBLE = "#FFFFFF"  # 상대 말풍선
@@ -391,7 +392,8 @@ class MaterialApp(tk.Frame):
         # 스크롤바: Tk는 투명도를 지원하지 않으므로 막대를 배경과 거의 같은 옅은 색·좁은 폭으로 그려
         # 투명해 보이게 하고, 마우스를 올렸을 때만 진하게 한다. (흰 영역용 Slim, 하늘색 대화창용 Chat)
         for name, trough, thumb, active in (("Slim.Vertical.TScrollbar", SURFACE, "#E8EBEF", "#B9C1CA"),
-                                            ("Chat.Vertical.TScrollbar", CHAT_BG, "#C4D4E3", "#8FA9C2")):
+                                            ("Chat.Vertical.TScrollbar", CHAT_BG, "#C4D4E3", "#8FA9C2"),
+                                            ("Soft.Vertical.TScrollbar", DETAIL_BG, "#DDE2E8", "#B9C1CA")):
             style.layout(name, [("Vertical.Scrollbar.trough", {"sticky": "ns", "children": [
                 ("Vertical.Scrollbar.thumb", {"expand": "1", "sticky": "nswe"})]})])
             style.configure(name, troughcolor=trough, background=thumb, bordercolor=trough,
@@ -497,7 +499,7 @@ class MaterialApp(tk.Frame):
         self.right_panes = tk.PanedWindow(right, orient="vertical", bg=SURFACE, bd=0, sashwidth=14,
                                           sashrelief="flat", sashcursor="sb_v_double_arrow", showhandle=False)
         self.right_panes.pack(fill="both", expand=True)
-        tree_box = tk.Frame(self.right_panes, bg=SURFACE)
+        tree_box = tk.Frame(self.right_panes, bg=SURFACE, padx=8)  # 아래 세부내용 영역 안쪽 여백과 스크롤바 위치를 맞춘다
         self.right_panes.add(tree_box, minsize=120, stretch="always", height=380)
         self.tool_tree = ttk.Treeview(tree_box, show="tree", selectmode="browse", style="Trace.Treeview")
         tree_scroll = ttk.Scrollbar(tree_box, command=self.tool_tree.yview, style="Slim.Vertical.TScrollbar")
@@ -507,15 +509,19 @@ class MaterialApp(tk.Frame):
         self.tool_tree.tag_configure("group", font=f.small_bold, foreground=MUTED)
         self.tool_tree.bind("<<TreeviewSelect>>", lambda _e: self._show_detail())
 
-        detail_box = tk.Frame(self.right_panes, bg=SURFACE)
-        self.right_panes.add(detail_box, minsize=100, stretch="always")
-        tk.Label(detail_box, text="입력과 결과", bg=SURFACE, fg=TEXT, font=f.small_bold).pack(anchor="w", padx=12)
-        detail_row = tk.Frame(detail_box, bg=SURFACE)
+        # 도구별 세부내용: 연한 회색 둥근 바탕으로 조회 순서와 구분되는 별도 영역
+        self.detail_panel = RoundPanel(self.right_panes, fill=DETAIL_BG, bg=SURFACE, radius=14, pad=8)
+        self.right_panes.add(self.detail_panel, minsize=110, stretch="always")
+        detail_box = self.detail_panel.inner
+        self.detail_title = tk.Label(detail_box, text="도구별 세부내용 조회", bg=DETAIL_BG, fg=TEXT,
+                                     font=f.body_bold)
+        self.detail_title.pack(anchor="w", padx=8, pady=(4, 2))
+        detail_row = tk.Frame(detail_box, bg=DETAIL_BG)
         detail_row.pack(fill="both", expand=True)
-        self.detail = tk.Text(detail_row, wrap="none", font=f.mono, height=9, state="disabled", bg=SURFACE,
-                              fg=TEXT, relief="flat", padx=12, pady=6, highlightthickness=0)
+        self.detail = tk.Text(detail_row, wrap="none", font=f.mono, height=9, state="disabled", bg=DETAIL_BG,
+                              fg=TEXT, relief="flat", padx=8, pady=4, highlightthickness=0)
         self.detail_scroll = ttk.Scrollbar(detail_row, orient="vertical", command=self.detail.yview,
-                                           style="Slim.Vertical.TScrollbar")
+                                           style="Soft.Vertical.TScrollbar")
         self.detail.pack(side="left", fill="both", expand=True)
         self.detail.configure(yscrollcommand=_autohide(self.detail_scroll, self.detail))
         self._show_hint()

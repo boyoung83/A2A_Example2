@@ -376,3 +376,11 @@ def test_detail_hint_explains_clicking_a_step(root):
     assert "hint" in app.detail.tag_names("1.0")  # 안내문은 본문 글꼴(①②③이 깨지지 않게)
     app.new_conversation()
     assert app.detail.get("1.0", "end").strip() == app_module.DETAIL_HINT
+
+
+def test_detail_area_is_separate_region(root):
+    import app as app_module
+    app = make_app(root, FakeAgent())
+    assert app.detail_title["text"] == "도구별 세부내용 조회"
+    assert app.detail_panel.is_rounded and app.detail_panel.fill == app_module.DETAIL_BG
+    assert app.detail["bg"] == app_module.DETAIL_BG != app_module.SURFACE
