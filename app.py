@@ -4,8 +4,8 @@
 """
 import json
 import queue
-import re
 import threading
+from datetime import datetime
 import tkinter as tk
 from tkinter import font as tkfont
 from tkinter import ttk
@@ -26,7 +26,11 @@ FAINT = "#94A3B8"
 PRIMARY = "#2563EB"
 PRIMARY_HOVER = "#1D4ED8"
 PRIMARY_SOFT = "#EFF6FF"
-USER_BUBBLE = "#DBEAFE"
+CHAT_BG = "#B2C7DA"       # 카카오톡 대화방 배경
+USER_BUBBLE = "#FEE500"   # 내 말풍선 (카카오톡 노랑)
+AGENT_BUBBLE = "#FFFFFF"  # 상대 말풍선
+CHAT_MUTED = "#4B5563"
+BUBBLE_WRAP = 460
 HEADER = "#0F172A"
 HEADER_MUTED = "#94A3B8"
 HEADER_RAISED = "#1E293B"
@@ -39,7 +43,6 @@ STATUS_COLORS = {  # 판정: (강조색, 옅은 배경)
     "확인 불가": ("#475569", "#F1F5F9"),
 }
 LIMIT_CHOICES = ("16", "8")
-BOLD_PATTERN = re.compile(r"\*\*(.+?)\*\*")
 
 
 class Fonts:
@@ -248,11 +251,10 @@ class MaterialApp(tk.Frame):
         self.entry.pack(fill="x", padx=10, pady=7)
         self.entry.bind("<Return>", lambda _e: self.send())
 
-        chat_box = tk.Frame(chat_card, bg=SUBTLE)
+        chat_box = tk.Frame(chat_card, bg=CHAT_BG)
         chat_box.pack(fill="both", expand=True, padx=18)
-        self.chat = tk.Text(chat_box, wrap="word", font=f.chat, state="disabled", padx=14, pady=10,
-                            bg=SUBTLE, fg=TEXT, relief="flat", highlightthickness=0, cursor="arrow",
-                            spacing2=3)
+        self.chat = tk.Text(chat_box, wrap="word", font=f.chat, state="disabled", padx=12, pady=12,
+                            bg=CHAT_BG, fg=TEXT, relief="flat", highlightthickness=0, cursor="arrow")
         scroll = ttk.Scrollbar(chat_box, command=self.chat.yview, style="Slim.Vertical.TScrollbar")
         self.chat.configure(yscrollcommand=scroll.set)
         scroll.pack(side="right", fill="y")
@@ -287,24 +289,19 @@ class MaterialApp(tk.Frame):
         self.detail.pack(fill="both", expand=True, padx=18, pady=(0, 16))
 
     def _configure_chat_tags(self):
+        """말풍선 줄 정렬과 가운데 알림 스타일. 말풍선 자체는 위젯으로 그린다."""
         f = self.fonts
         c = self.chat
-        c.tag_configure("who_user", foreground=MUTED, font=f.small_bold, justify="right", spacing1=10)
-        c.tag_configure("who_agent", foreground=MUTED, font=f.small_bold, spacing1=10)
-        c.tag_configure("user", background=USER_BUBBLE, lmargin1=160, lmargin2=160, rmargin=4,
-                        spacing1=6, spacing3=6)
-        c.tag_configure("agent", background=SURFACE, lmargin1=4, lmargin2=4, rmargin=90, spacing1=6, spacing3=6)
-        c.tag_configure("bold", font=f.chat_bold)
-        c.tag_configure("meta", foreground=MUTED, font=f.small, spacing1=6)
-        c.tag_configure("waiting", foreground=PRIMARY, font=f.small_bold, spacing1=8)
-        c.tag_configure("error", foreground=DANGER, font=f.body_bold, spacing1=8)
-        c.tag_configure("note", foreground=MUTED, font=f.small, lmargin1=16, rmargin=90)
-        for status, (accent, tint) in STATUS_COLORS.items():
-            c.tag_configure(f"badge:{status}", background=accent, foreground="#FFFFFF", font=f.verdict)
-            c.tag_configure(f"card:{status}", background=tint, lmargin1=16, lmargin2=16, rmargin=90,
-                            spacing1=4, spacing3=4)
-            c.tag_configure(f"head:{status}", background=tint, foreground=accent, font=f.verdict,
-                            lmargin1=16, rmargin=90, spacing1=12, spacing3=6)
+        c.tag_configure("row_user", justify="right", rmargin=4, spacing1=10)
+        c.tag_configure("row_agent", justify="left", lmargin1=4, spacing1=10)
+        c.tag_configure("meta", justify="center", foreground=CHAT_MUTED, font=f.small, spacing1=10)
+        c.tag_configure("note", justify="center", foreground=CHAT_MUTED, font=f.small, spacing1=6)
+        c.tag_configure("waiting", justify="center", foreground=TEXT, font=f.small_bold, spacing1=12)
+        c.tag_configure("error", justify="center", foreground=DANGER, font=f.body_bold, spacing1=10)
+        self.user_bubbles: list[tk.Label] = []
+        self.agent_bubbles: list[list[tk.Label]] = []
+        self.verdict_badges: list[tk.Label] = []
+        self._log: list[str] = []
 
     def _paint_limit(self):
         for value, tab in self._limit_tabs.items():
@@ -355,6 +352,12 @@ class MaterialApp(tk.Frame):
         self.chat.configure(state="normal")
         self.chat.delete("1.0", "end")
         self.chat.configure(state="disabled")
+        for child in self.chat.winfo_children():
+            child.destroy()
+        self.user_bubbles.clear()
+        self.agent_bubbles.clear()
+        self.verdict_badges.clear()
+        self._log.clear()
         self._append_meta("새 대화를 시작합니다.", "meta")
 
     def _apply_fail_mode(self):
@@ -396,7 +399,8 @@ class MaterialApp(tk.Frame):
     def _on_turn_done(self, n: int, result: TurnResult) -> None:
         self._clear_waiting()
         self._append_message("에이전트", result.text or "(답변 없음)", "agent")
-        verdict = build_verdict(result.tool_calls, getattr(self.agent, "last_bom", None))
+        verdict = build_verdict(result.tool_calls, getattr(self.agent, "last_bom", None),
+                                getattr(self.agent, "conversation_calls", None))
         if verdict:
             self._render_verdict(verdict)
         if result.limit_reached:
@@ -412,15 +416,38 @@ class MaterialApp(tk.Frame):
         self._set_busy(False)
 
     def _render_verdict(self, verdict: Verdict) -> None:
+        """판정 카드: 에이전트 말풍선에 이어 붙는 카드 메시지 (카톡의 연속 메시지처럼 프로필 생략)."""
+        f = self.fonts
         s = verdict.status
-        self._write([(f" {s} ", f"badge:{s}"), ("  자재 기준 판정\n", f"head:{s}")])
+        accent, tint = STATUS_COLORS[s]
+        row = tk.Frame(self.chat, bg=CHAT_BG)
+        tk.Frame(row, bg=CHAT_BG, width=48).pack(side="left")  # 프로필 자리만큼 들여쓰기
+        card = tk.Frame(row, bg=AGENT_BUBBLE, highlightthickness=1, highlightbackground=accent)
+        card.pack(side="left")
+        head = tk.Frame(card, bg=tint)
+        head.pack(fill="x")
+        badge = tk.Label(head, text=f" {s} ", bg=accent, fg="#FFFFFF", font=f.verdict, padx=6)
+        badge.pack(side="left", padx=(12, 8), pady=8)
+        tk.Label(head, text="자재 기준 판정", bg=tint, fg=accent, font=f.title).pack(side="left", pady=8, padx=(0, 12))
+        self.verdict_badges.append(badge)
+        lines = [f"[판정 {s}] 자재 기준 판정"]
         for r in verdict.rows:
-            line = (f"{r.part_name} ({r.part_code})   필요 {r.required} · 재고 {r.current_stock} · "
-                    f"반영 입고 {r.inbound_before_start} · 현재부족 {r.shortage_now} · 시작기준부족 {r.shortage_at_start}")
+            item = tk.Frame(card, bg=AGENT_BUBBLE)
+            item.pack(fill="x", padx=14, pady=(8, 0))
+            short = r.shortage_at_start > 0 or r.inbound_error
+            tk.Label(item, text=f"{r.part_name} ({r.part_code})", bg=AGENT_BUBBLE,
+                     fg=accent if short else TEXT, font=f.body_bold).pack(anchor="w")
+            detail = (f"필요 {r.required} · 재고 {r.current_stock} · 반영 입고 {r.inbound_before_start} · "
+                      f"현재부족 {r.shortage_now} · 시작기준부족 {r.shortage_at_start}")
             if r.inbound_error:
-                line += " · 입고 조회 실패"
-            self._write([(line + "\n", f"card:{s}")])
-        self._write([("※ 자재 기준 판단 · 설비·인력은 확인하지 않음\n", f"card:{s}")])
+                detail += " · 입고 조회 실패"
+            tk.Label(item, text=detail, bg=AGENT_BUBBLE, fg=MUTED, font=f.small).pack(anchor="w")
+            lines.append(f"{r.part_name}({r.part_code}) {detail}")
+        tk.Label(card, text="※ 자재 기준 판단 · 설비·인력은 확인하지 않음", bg=AGENT_BUBBLE, fg=FAINT,
+                 font=f.small).pack(anchor="w", padx=14, pady=(8, 10))
+        lines.append("※ 자재 기준 판단 · 설비·인력은 확인하지 않음")
+        self._insert_row(row, "row_agent")
+        self._log.append("\n".join(lines))
 
     def _show_detail(self) -> None:
         selected = self.tool_tree.selection()
@@ -449,27 +476,72 @@ class MaterialApp(tk.Frame):
             self.chat.delete(ranges[0], ranges[-1])
             self.chat.configure(state="disabled")
 
+    def transcript(self) -> str:
+        """대화창에 보이는 내용을 글자로 (테스트·확인용)."""
+        return "\n".join(self._log)
+
     def _append_message(self, who: str, text: str, kind: str) -> None:
-        """말풍선 하나. **굵게**는 굵은 글씨로 바꾸고 별표는 지운다."""
-        parts = [(f"{who}\n", f"who_{kind}")]
-        pos = 0
-        for m in BOLD_PATTERN.finditer(text):
-            parts.append((text[pos:m.start()], kind))
-            parts.append((m.group(1), (kind, "bold")))
-            pos = m.end()
-        parts.append((text[pos:].rstrip() + "\n", kind))
-        self._write(parts)
+        """카톡처럼: 내 메시지는 오른쪽 노란 말풍선, 에이전트는 왼쪽 프로필+이름+흰 말풍선, 옆에 시각."""
+        f = self.fonts
+        now = datetime.now()
+        stamp = f"{'오전' if now.hour < 12 else '오후'} {now.hour % 12 or 12}:{now:%M}"
+        row = tk.Frame(self.chat, bg=CHAT_BG)
+        if kind == "user":
+            tk.Label(row, text=stamp, bg=CHAT_BG, fg=CHAT_MUTED, font=f.small).pack(side="left", anchor="s", padx=6)
+            bubble = tk.Label(row, text=text, bg=USER_BUBBLE, fg=TEXT, font=f.chat, wraplength=BUBBLE_WRAP,
+                              justify="left", padx=12, pady=8)
+            bubble.pack(side="left")
+            self.user_bubbles.append(bubble)
+            self._insert_row(row, "row_user")
+            self._log.append(f"{who}: {text}")
+            return
+        # 빈 줄은 없애고, **로 시작하는 줄(결론)은 굵게, 별표는 지운다
+        lines = [line.rstrip() for line in text.splitlines() if line.strip()] or ["(답변 없음)"]
+        tk.Label(row, text="자", bg=PRIMARY, fg="#FFFFFF", font=f.title, width=3, pady=6).pack(
+            side="left", anchor="n", padx=(0, 8))
+        col = tk.Frame(row, bg=CHAT_BG)
+        col.pack(side="left")
+        tk.Label(col, text="자재 에이전트", bg=CHAT_BG, fg=TEXT, font=f.small).pack(anchor="w", pady=(0, 3))
+        line_row = tk.Frame(col, bg=CHAT_BG)
+        line_row.pack(anchor="w")
+        bubble = tk.Frame(line_row, bg=AGENT_BUBBLE, padx=12, pady=8)
+        bubble.pack(side="left")
+        labels = []
+        for line in lines:
+            bold = line.lstrip().startswith("**")
+            label = tk.Label(bubble, text=line.replace("**", ""), bg=AGENT_BUBBLE, fg=TEXT,
+                             font=f.chat_bold if bold else f.chat, wraplength=BUBBLE_WRAP, justify="left",
+                             anchor="w")
+            label.pack(anchor="w", pady=1)
+            labels.append(label)
+        tk.Label(line_row, text=stamp, bg=CHAT_BG, fg=CHAT_MUTED, font=f.small).pack(side="left", anchor="s", padx=6)
+        self.agent_bubbles.append(labels)
+        self._insert_row(row, "row_agent")
+        self._log.append(f"{who}: " + "\n".join(lb["text"] for lb in labels))
 
     def _append_meta(self, text: str, tag: str) -> None:
-        self._write([(text + "\n", tag)])
-
-    def _write(self, parts) -> None:
         self.chat.configure(state="normal")
-        for text, tags in parts:
-            if text:
-                self.chat.insert("end", text, tags)
+        self.chat.insert("end", text + "\n", tag)
         self.chat.configure(state="disabled")
         self.chat.see("end")
+        if tag != "waiting":
+            self._log.append(text)
+
+    def _insert_row(self, widget: tk.Widget, tag: str) -> None:
+        """말풍선 위젯 한 줄을 대화창 끝에 넣는다. 위젯 위에서도 마우스 휠로 스크롤되게 한다."""
+        self._bind_wheel(widget)
+        self.chat.configure(state="normal")
+        start = self.chat.index("end-1c")
+        self.chat.window_create("end", window=widget)
+        self.chat.insert("end", "\n")
+        self.chat.tag_add(tag, start, "end-1c")
+        self.chat.configure(state="disabled")
+        self.chat.see("end")
+
+    def _bind_wheel(self, widget: tk.Widget) -> None:
+        widget.bind("<MouseWheel>", lambda e: self.chat.yview_scroll(int(-e.delta / 120), "units"))
+        for child in widget.winfo_children():
+            self._bind_wheel(child)
 
     @staticmethod
     def _set_text(widget: tk.Text, text: str) -> None:

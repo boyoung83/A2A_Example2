@@ -39,20 +39,23 @@ class MaterialAgent:
         self.system = build_system_prompt(base_time)
         self.messages: list = []
         self.last_bom: list[dict] | None = None
+        self.conversation_calls: list[ToolCall] = []  # 새 대화 이후 실행한 모든 도구
 
     def reset(self) -> None:
         self.messages = []
         self.last_bom = None
+        self.conversation_calls = []
 
     def ask(self, user_text: str, max_tool_calls: int,
             on_tool_call: Callable[[ToolCall], None] | None = None) -> TurnResult:
-        start = len(self.messages)
+        start, calls_start = len(self.messages), len(self.conversation_calls)
         saved_bom = self.last_bom
         try:
             return self._run_turn(user_text, max_tool_calls, on_tool_call)
         except Exception as e:
             # 실패한 발화는 기록에서 통째로 빼서 다음 질문이 정상적으로 이어지게 한다
             del self.messages[start:]
+            del self.conversation_calls[calls_start:]
             self.last_bom = saved_bom
             raise e if isinstance(e, AgentError) else AgentError(_error_message(e)) from e
 
@@ -87,6 +90,7 @@ class MaterialAgent:
                     outcome = self.toolbox.run(block.name, dict(block.input))
                     call = ToolCall(block.name, dict(block.input), outcome.ok, outcome.payload)
                     calls.append(call)
+                    self.conversation_calls.append(call)
                     if call.name == "get_bom" and call.ok and call.payload.get("found"):
                         self.last_bom = call.payload["parts"]
                     if on_tool_call:

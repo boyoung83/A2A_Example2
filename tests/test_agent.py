@@ -106,3 +106,13 @@ def test_reset_clears(agent_with):
 def test_system_prompt_asks_for_plain_text(agent_with):
     agent, _ = agent_with()
     assert "마크다운" in agent.system and "표" in agent.system
+
+
+def test_conversation_calls_accumulate_and_reset(agent_with):
+    agent, _ = agent_with(tool_reply(("get_bom", {"product_code": "P-100"})), text_reply("a"),
+                          tool_reply(("get_inventory", {"part_code": "BRG-A"})), text_reply("b"))
+    agent.ask("q1", 16)
+    agent.ask("q2", 16)
+    assert [c.name for c in agent.conversation_calls] == ["get_bom", "get_inventory"]
+    agent.reset()
+    assert agent.conversation_calls == []

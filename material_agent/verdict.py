@@ -27,20 +27,25 @@ class Verdict:
     rows: list[PartRow]
 
 
-def build_verdict(turn_calls: list[ToolCall], bom_parts: list[dict] | None) -> Verdict | None:
+def build_verdict(turn_calls: list[ToolCall], bom_parts: list[dict] | None,
+                  conversation_calls: list[ToolCall] | None = None) -> Verdict | None:
+    """수량은 이번 발화의 계산 결과만 쓴다. 입고 확인 여부는 같은 대화의 앞 발화 조회도 인정한다
+    (Claude가 바로 앞에서 조회한 입고 결과를 재사용하는 경우). 부품마다 마지막 입고 조회 결과를 따른다."""
     if not bom_parts:
         return None
     last_calc = {c.payload["part_code"]: c.payload
                  for c in turn_calls if c.name == "calculate_shortage" and c.ok}
-    inbound_ok, inbound_err = set(), set()
-    for c in turn_calls:
+    inbound_state: dict[str, str] = {}  # 부품 → "ok" | "error"
+    for c in conversation_calls if conversation_calls is not None else turn_calls:
         if c.name != "get_inbound_schedule":
             continue
         part = _code(c.args.get("part_code", ""))
         if not c.ok:
-            inbound_err.add(part)
+            inbound_state[part] = "error"
         elif c.args.get("production_start"):
-            inbound_ok.add(part)
+            inbound_state[part] = "ok"
+    inbound_ok = {p for p, s in inbound_state.items() if s == "ok"}
+    inbound_err = {p for p, s in inbound_state.items() if s == "error"}
 
     rows = []
     for part in bom_parts:

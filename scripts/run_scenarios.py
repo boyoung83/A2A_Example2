@@ -65,7 +65,7 @@ def run(selected: list[str] | None = None) -> Path:
             for i, c in enumerate(result.tool_calls, 1):
                 args = ", ".join(f"{k}={v}" for k, v in c.args.items() if v is not None)
                 lines.append(f"{i}. `{c.name}({args})` → {summarize(c)}")
-            verdict = build_verdict(result.tool_calls, agent.last_bom)
+            verdict = build_verdict(result.tool_calls, agent.last_bom, agent.conversation_calls)
             lines += ["", f"**에이전트:** {result.text}", "",
                       f"**판정 카드:** {verdict.status if verdict else '없음'}", ""]
     out = PROJECT_DIR / "docs" / "검증" / f"실행결과_{datetime.now():%Y%m%d_%H%M}.md"

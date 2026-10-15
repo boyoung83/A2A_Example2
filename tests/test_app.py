@@ -61,7 +61,7 @@ def make_app(root, agent):
 
 
 def chat_text(app):
-    return app.chat.get("1.0", "end")
+    return app.transcript()
 
 
 NINE_CALLS = [ToolCall("get_bom", {"product_code": "P-100"}, True, {"product_code": "P-100", "found": True, "parts": P100}),
@@ -79,9 +79,10 @@ def test_send_runs_turn_and_renders(root):
     assert app.tool_tree.item(parent, "text") == "질문 1 · 도구 4/16회"
     assert len(app.tool_tree.get_children(parent)) == 4
     text = chat_text(app)
-    assert "오전 9시야" in text and "생산 불가입니다" in text and " 불가   자재 기준 판정" in text
-    badge = app.chat.search(" 불가 ", "1.0")
-    assert "badge:불가" in app.chat.tag_names(badge)
+    assert [b["text"] for b in app.user_bubbles] == ["오전 9시야"] and "생산 불가입니다" in text
+    assert "[판정 불가] 자재 기준 판정" in text
+    badge = app.verdict_badges[-1]
+    assert badge["text"].strip() == "불가" and badge["bg"] == "#DC2626"
     assert "자재 기준 판단" in text and not app.busy
 
 
@@ -104,7 +105,7 @@ def test_no_card_for_simple_answer(root):
     app.entry.insert(0, "센서 B 재고만 알려줘")
     app.send()
     app._drain()
-    assert "판정:" not in chat_text(app)
+    assert "[판정" not in chat_text(app) and app.verdict_badges == []
 
 
 def test_error_row_tagged(root):
@@ -183,10 +184,27 @@ def test_markdown_bold_rendered_without_stars(root):
     app._drain()
     text = chat_text(app)
     assert "결론: 불가입니다" in text and "**" not in text
-    start = app.chat.search("결론", "1.0")
-    assert "bold" in app.chat.tag_names(start)
+    first_line = app.agent_bubbles[-1][0]
+    assert first_line["text"] == "결론: 불가입니다" and "bold" in str(first_line["font"])
 
 
 def test_api_status_shown_in_header(root):
     app = make_app(root, FakeAgent())
     assert "Claude API 연결 준비됨" in app.status_label["text"]
+
+
+def test_user_bubble_right_aligned_and_distinct(root):
+    app = make_app(root, FakeAgent())
+    c = app.chat
+    assert c.tag_cget("row_user", "justify") == "right" and c.tag_cget("row_agent", "justify") in ("", "left")
+    app._append_message("나", "오전 9시야", "user")
+    app._append_message("에이전트", "확인했습니다", "agent")
+    user, agent_line = app.user_bubbles[-1], app.agent_bubbles[-1][0]
+    assert user["text"] == "오전 9시야" and user["bg"] != agent_line["bg"]
+    assert "row_user" in c.tag_names(c.index(str(user.master)))
+
+
+def test_agent_blank_lines_collapsed(root):
+    app = make_app(root, FakeAgent())
+    app._append_message("에이전트", "첫 줄\n\n\n둘째 줄", "agent")
+    assert "첫 줄\n둘째 줄" in chat_text(app)

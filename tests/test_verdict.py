@@ -66,3 +66,11 @@ def test_uses_last_calculation_per_part():
     v = build_verdict([calc("BRG-A", 10, 2, 30, 0), calc("SNS-B", 10, 1, 25, 0),
                        inb("BRG-A", FOUR), calc("BRG-A", 30, 2, 30, 20)], P100)
     assert v.rows[0].required == 60
+
+
+def test_inbound_checked_in_earlier_turn_counts():
+    # 질문 5 이어서: "30개로 늘리면?" — Claude가 앞 발화의 베어링 A 입고 조회를 재사용
+    earlier = [inb("BRG-A", FOUR)]
+    turn = [inb("SNS-B", FOUR), calc("BRG-A", 30, 2, 30, 20), calc("SNS-B", 30, 1, 25, 0)]
+    v = build_verdict(turn, P100, earlier + turn)
+    assert v.status == "불가" and [r.shortage_at_start for r in v.rows] == [10, 5]
