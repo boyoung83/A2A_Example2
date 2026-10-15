@@ -98,19 +98,21 @@ class Bubble(tk.Canvas):
     RADIUS = 16
 
     def __init__(self, master, lines: list[tuple[str, bool]], fill: str, fonts: Fonts,
-                 wrap: int = BUBBLE_WRAP, padx: int = 14, pady: int = 9, bg: str = CHAT_BG):
+                 wrap: int = BUBBLE_WRAP, padx: int = 14, pady: int = 9, bg: str = CHAT_BG,
+                 line_gap: int = 3):
         super().__init__(master, bg=bg, highlightthickness=0, bd=0)
         self.lines = lines
         self.fill = fill
         self.text = "\n".join(t for t, _ in lines)
+        self.line_gap = line_gap  # 줄(문장·목록 항목) 사이 간격. 자동 줄바꿈된 부분에는 적용되지 않음
         y, width = pady, 0
         for text, bold in lines:
-            item = self.create_text(padx, y, text=text, anchor="nw", width=wrap, fill=TEXT,
+            item = self.create_text(padx, y, text=text, anchor="nw", width=wrap, fill=TEXT, tags=("line",),
                                     font=fonts.chat_bold if bold else fonts.chat)
             x1, y1, x2, y2 = self.bbox(item)
             width = max(width, x2 - padx)
-            y = y2 + 3
-        w, h = width + 2 * padx, y - 3 + pady
+            y = y2 + line_gap
+        w, h = width + 2 * padx, y - line_gap + pady
         self.configure(width=w, height=h)
         shape = _round_rect(self, 1, 1, w - 1, h - 1, min(self.RADIUS, h // 2), fill=fill, outline=fill)
         self.tag_lower(shape)
@@ -565,7 +567,9 @@ class MaterialApp(tk.Frame):
         line_row = tk.Frame(col, bg=CHAT_BG)
         line_row.pack(anchor="w")
         styled = [(line.replace("**", ""), line.lstrip().startswith("**")) for line in lines]
-        bubble = Bubble(line_row, styled, AGENT_BUBBLE, f)
+        # 에이전트 답변은 줄마다 빈 줄 하나만큼 띄워 읽기 쉽게 한다
+        blank_line = tkfont.Font(font=f.chat).metrics("linespace")
+        bubble = Bubble(line_row, styled, AGENT_BUBBLE, f, line_gap=blank_line)
         bubble.pack(side="left")
         tk.Label(line_row, text=stamp, bg=CHAT_BG, fg=CHAT_MUTED, font=f.small).pack(side="left", anchor="s", padx=6)
         self.agent_bubbles.append(bubble)

@@ -248,3 +248,15 @@ def test_andon_tower_is_compact(root):
 def test_entry_has_placeholder_until_focus(root):
     app = make_app(root, FakeAgent(TurnResult("x", [])))
     assert app.entry.get() == "" and app.placeholder.winfo_manager() != ""
+
+
+def test_agent_lines_separated_by_blank_line(root):
+    from tkinter import font as tkfont
+    app = make_app(root, FakeAgent())
+    app._append_message("에이전트", "첫 문장입니다.\n- 둘째 줄", "agent")
+    bubble = app.agent_bubbles[-1]
+    first, second = bubble.find_withtag("line")
+    gap = bubble.coords(second)[1] - bubble.bbox(first)[3]
+    assert gap >= tkfont.Font(font=app.fonts.chat).metrics("linespace") * 0.8
+    app._append_message("나", "오전 9시야", "user")
+    assert app.user_bubbles[-1].line_gap < app.agent_bubbles[-1].line_gap
