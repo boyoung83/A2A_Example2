@@ -61,6 +61,8 @@ def main():
             root.after(300, step)
             return
         root.update()
+        app.chat.yview_moveto(1.0)  # 마지막 메시지(판정 카드)까지 보이게
+        root.update()
         x, y = root.winfo_rootx(), root.winfo_rooty()
         ImageGrab.grab((x, y, x + root.winfo_width(), y + root.winfo_height())).save(OUT / name)
         print(f"저장: {OUT / name}", flush=True)

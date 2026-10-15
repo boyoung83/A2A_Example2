@@ -79,7 +79,7 @@ def test_send_runs_turn_and_renders(root):
     assert app.tool_tree.item(parent, "text") == "질문 1 · 도구 4/16회"
     assert len(app.tool_tree.get_children(parent)) == 4
     text = chat_text(app)
-    assert [b["text"] for b in app.user_bubbles] == ["오전 9시야"] and "생산 불가입니다" in text
+    assert [b.text for b in app.user_bubbles] == ["오전 9시야"] and "생산 불가입니다" in text
     assert "[판정 불가] 자재 기준 판정" in text
     badge = app.verdict_badges[-1]
     assert badge["text"].strip() == "불가" and badge["bg"] == "#DC2626"
@@ -184,8 +184,8 @@ def test_markdown_bold_rendered_without_stars(root):
     app._drain()
     text = chat_text(app)
     assert "결론: 불가입니다" in text and "**" not in text
-    first_line = app.agent_bubbles[-1][0]
-    assert first_line["text"] == "결론: 불가입니다" and "bold" in str(first_line["font"])
+    bubble = app.agent_bubbles[-1]
+    assert bubble.lines[0] == ("결론: 불가입니다", True) and "**" not in bubble.text
 
 
 def test_api_status_shown_in_header(root):
@@ -199,8 +199,9 @@ def test_user_bubble_right_aligned_and_distinct(root):
     assert c.tag_cget("row_user", "justify") == "right" and c.tag_cget("row_agent", "justify") in ("", "left")
     app._append_message("나", "오전 9시야", "user")
     app._append_message("에이전트", "확인했습니다", "agent")
-    user, agent_line = app.user_bubbles[-1], app.agent_bubbles[-1][0]
-    assert user["text"] == "오전 9시야" and user["bg"] != agent_line["bg"]
+    user, agent_bubble = app.user_bubbles[-1], app.agent_bubbles[-1]
+    assert user.text == "오전 9시야" and user.fill != agent_bubble.fill
+    assert user.is_rounded and agent_bubble.is_rounded
     assert "row_user" in c.tag_names(c.index(str(user.master)))
 
 

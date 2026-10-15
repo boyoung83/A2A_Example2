@@ -87,6 +87,36 @@ class Button(tk.Label):
                        fg=fg, disabledforeground=FAINT, cursor="hand2" if enabled else "arrow")
 
 
+class Bubble(tk.Canvas):
+    """모서리가 둥근 말풍선. 줄마다 (글자, 굵게 여부)를 받아 캔버스에 그린다."""
+
+    RADIUS = 16
+
+    def __init__(self, master, lines: list[tuple[str, bool]], fill: str, fonts: "Fonts",
+                 wrap: int = 460, padx: int = 14, pady: int = 9, bg: str = "#B2C7DA"):
+        super().__init__(master, bg=bg, highlightthickness=0, bd=0)
+        self.lines = lines
+        self.fill = fill
+        self.text = "\n".join(t for t, _ in lines)
+        y, width = pady, 0
+        for text, bold in lines:
+            item = self.create_text(padx, y, text=text, anchor="nw", width=wrap, fill=TEXT,
+                                    font=fonts.chat_bold if bold else fonts.chat)
+            x1, y1, x2, y2 = self.bbox(item)
+            width = max(width, x2 - padx)
+            y = y2 + 3
+        w, h = width + 2 * padx, y - 3 + pady
+        self.configure(width=w, height=h)
+        shape = self._round_rect(1, 1, w - 1, h - 1, min(self.RADIUS, h // 2), fill=fill, outline=fill)
+        self.tag_lower(shape)
+        self.is_rounded = True
+
+    def _round_rect(self, x1, y1, x2, y2, r, **kw):
+        pts = [x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r, x2, y2 - r, x2, y2, x2 - r, y2,
+               x1 + r, y2, x1, y2, x1, y2 - r, x1, y1 + r, x1, y1]
+        return self.create_polygon(pts, smooth=True, **kw)
+
+
 class Card(tk.Frame):
     def __init__(self, master, **kw):
         super().__init__(master, bg=SURFACE, highlightthickness=1, highlightbackground=BORDER, **kw)
@@ -298,8 +328,8 @@ class MaterialApp(tk.Frame):
         c.tag_configure("note", justify="center", foreground=CHAT_MUTED, font=f.small, spacing1=6)
         c.tag_configure("waiting", justify="center", foreground=TEXT, font=f.small_bold, spacing1=12)
         c.tag_configure("error", justify="center", foreground=DANGER, font=f.body_bold, spacing1=10)
-        self.user_bubbles: list[tk.Label] = []
-        self.agent_bubbles: list[list[tk.Label]] = []
+        self.user_bubbles: list[Bubble] = []
+        self.agent_bubbles: list[Bubble] = []
         self.verdict_badges: list[tk.Label] = []
         self._log: list[str] = []
 
@@ -488,8 +518,7 @@ class MaterialApp(tk.Frame):
         row = tk.Frame(self.chat, bg=CHAT_BG)
         if kind == "user":
             tk.Label(row, text=stamp, bg=CHAT_BG, fg=CHAT_MUTED, font=f.small).pack(side="left", anchor="s", padx=6)
-            bubble = tk.Label(row, text=text, bg=USER_BUBBLE, fg=TEXT, font=f.chat, wraplength=BUBBLE_WRAP,
-                              justify="left", padx=12, pady=8)
+            bubble = Bubble(row, [(text, False)], USER_BUBBLE, f, wrap=BUBBLE_WRAP, bg=CHAT_BG)
             bubble.pack(side="left")
             self.user_bubbles.append(bubble)
             self._insert_row(row, "row_user")
@@ -504,20 +533,13 @@ class MaterialApp(tk.Frame):
         tk.Label(col, text="자재 에이전트", bg=CHAT_BG, fg=TEXT, font=f.small).pack(anchor="w", pady=(0, 3))
         line_row = tk.Frame(col, bg=CHAT_BG)
         line_row.pack(anchor="w")
-        bubble = tk.Frame(line_row, bg=AGENT_BUBBLE, padx=12, pady=8)
+        styled = [(line.replace("**", ""), line.lstrip().startswith("**")) for line in lines]
+        bubble = Bubble(line_row, styled, AGENT_BUBBLE, f, wrap=BUBBLE_WRAP, bg=CHAT_BG)
         bubble.pack(side="left")
-        labels = []
-        for line in lines:
-            bold = line.lstrip().startswith("**")
-            label = tk.Label(bubble, text=line.replace("**", ""), bg=AGENT_BUBBLE, fg=TEXT,
-                             font=f.chat_bold if bold else f.chat, wraplength=BUBBLE_WRAP, justify="left",
-                             anchor="w")
-            label.pack(anchor="w", pady=1)
-            labels.append(label)
         tk.Label(line_row, text=stamp, bg=CHAT_BG, fg=CHAT_MUTED, font=f.small).pack(side="left", anchor="s", padx=6)
-        self.agent_bubbles.append(labels)
+        self.agent_bubbles.append(bubble)
         self._insert_row(row, "row_agent")
-        self._log.append(f"{who}: " + "\n".join(lb["text"] for lb in labels))
+        self._log.append(f"{who}: {bubble.text}")
 
     def _append_meta(self, text: str, tag: str) -> None:
         self.chat.configure(state="normal")
@@ -536,7 +558,9 @@ class MaterialApp(tk.Frame):
         self.chat.insert("end", "\n")
         self.chat.tag_add(tag, start, "end-1c")
         self.chat.configure(state="disabled")
-        self.chat.see("end")
+        # 말풍선 크기가 정해진 뒤에 맨 아래로 (바로 see 하면 위젯 높이 계산 전이라 덜 내려간다)
+        self.after_idle(lambda: self.chat.yview_moveto(1.0))
+        self.after(80, lambda: self.chat.yview_moveto(1.0))
 
     def _bind_wheel(self, widget: tk.Widget) -> None:
         widget.bind("<MouseWheel>", lambda e: self.chat.yview_scroll(int(-e.delta / 120), "units"))
