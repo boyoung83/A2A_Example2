@@ -282,6 +282,13 @@ def test_right_scrollbars_aligned(root):
     root.deiconify()
     root.geometry("1400x880")
     root.update()
+    # 스크롤바는 내용이 넘칠 때만 보이므로, 양쪽 모두 넘치게 채운다
+    app._start_turn_group(1)
+    for i in range(30):
+        app._on_tool_call(1, ToolCall("get_inventory", {"part_code": f"P{i}"}, True, {"found": True,
+                                      "current_stock": i, "unit": "개"}))
+    app._set_text(app.detail, "\n".join(f"line {i}" for i in range(80)))
+    root.update()
     assert app.detail_scroll.winfo_ismapped() and app.detail_scroll.winfo_width() > 1
     tree_sb = [w for w in app.tool_tree.master.winfo_children() if isinstance(w, ttk.Scrollbar)][0]
     right_edge = lambda w: w.winfo_rootx() + w.winfo_width()
@@ -307,3 +314,55 @@ def test_chat_uses_chat_scrollbar_style(root):
     app = make_app(root, FakeAgent())
     chat_sb = [w for w in app.chat.master.winfo_children() if isinstance(w, ttk.Scrollbar)][0]
     assert str(chat_sb["style"]) == "Chat.Vertical.TScrollbar"
+
+
+def test_buttons_are_rounded(root):
+    app = make_app(root, FakeAgent())
+    assert app.send_button.is_rounded and app.new_button.is_rounded
+    app.send_button.set_enabled(False)
+    assert str(app.send_button["state"]) == "disabled"
+
+
+def test_limit_segmented_control(root):
+    app = make_app(root, FakeAgent())
+    assert app.limit_control.is_rounded
+    app.limit_control.select("8")
+    assert app.limit_var.get() == "8" and app.limit_control.selected == "8"
+
+
+def test_fail_switch_toggles(root):
+    agent = FakeAgent()
+    app = make_app(root, agent)
+    assert app.fail_switch.on is False
+    app.fail_switch.toggle()
+    assert app.fail_var.get() is True and app.fail_switch.on is True and agent.toolbox.inbound_fails is True
+
+
+def test_panels_rounded_and_tree_borderless(root):
+    app = make_app(root, FakeAgent())
+    assert app.chat_panel.is_rounded and app.trace_panel.is_rounded and app.entry_pill.is_rounded
+    assert "field" not in str(ttk.Style(app).layout("Trace.Treeview"))
+
+
+def test_andon_card_rounded(root):
+    from material_agent.verdict import PartRow, Verdict
+    app = make_app(root, FakeAgent())
+    app._render_verdict(Verdict("가능", [PartRow("BRG-A", "베어링 A", 20, 30, 0, 0, 0, False)]))
+    assert app.verdict_cards[-1].is_rounded
+
+
+
+def test_scrollbars_hide_when_content_fits(root):
+    app = make_app(root, FakeAgent())
+    app.pack(fill="both", expand=True)
+    root.deiconify()
+    root.geometry("1400x880")
+    root.update()
+    assert not app.detail_scroll.winfo_ismapped()
+    app._set_text(app.detail, "\n".join(f"line {i}" for i in range(80)))
+    root.update()
+    assert app.detail_scroll.winfo_ismapped()
+    app._set_text(app.detail, "short")
+    root.update()
+    assert not app.detail_scroll.winfo_ismapped()
+    root.withdraw()

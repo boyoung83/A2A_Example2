@@ -75,28 +75,152 @@ class Fonts:
         self.mono = (mono, 9)
 
 
-class Button(tk.Label):
-    """평평한 버튼 (hover·비활성 상태 포함)."""
+def _round_rect(canvas, x1, y1, x2, y2, r, **kw):
+    pts = [x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r, x2, y2 - r, x2, y2, x2 - r, y2,
+           x1 + r, y2, x1, y2, x1, y2 - r, x1, y1 + r, x1, y1]
+    return canvas.create_polygon(pts, smooth=True, **kw)
 
-    STYLES = {
+
+class RoundButton(tk.Canvas):
+    """모서리가 둥근 버튼 (마우스를 올리면 색이 바뀌고, 비활성이면 흐려짐)."""
+
+    STYLES = {  # 종류: (채움, 글자, 마우스 올림, 테두리)
         "primary": (STEEL, "#FFFFFF", STEEL_SOFT, STEEL),
-        "secondary": (SURFACE, TEXT, FLOOR, RULE),
+        "secondary": (SURFACE, TEXT, "#F1F3F5", RULE),
     }
 
-    def __init__(self, master, text, command, kind="secondary", font=None, **kw):
-        bg, fg, hover, border = self.STYLES[kind]
-        super().__init__(master, text=text, bg=bg, fg=fg, font=font, cursor="hand2",
-                         padx=16, pady=7, highlightthickness=1, highlightbackground=border, **kw)
-        self._colors = (bg, fg, hover)
+    def __init__(self, master, text, command, kind="secondary", font=None, bg=FLOOR,
+                 padx=18, pady=8, radius=None):
+        measure = tkfont.Font(font=font)
+        w = measure.measure(text) + 2 * padx
+        h = measure.metrics("linespace") + 2 * pady
+        super().__init__(master, width=w, height=h, bg=bg, highlightthickness=0, bd=0, cursor="hand2")
+        fill, fg, hover, border = self.STYLES[kind]
+        self._colors = (fill, fg, hover, border)
+        self._shape = _round_rect(self, 1, 1, w - 2, h - 2, radius or h // 2 - 1, fill=fill, outline=border)
+        self._label = self.create_text(w // 2, h // 2, text=text, fill=fg, font=font)
+        self.text = text
         self._command = command
-        self.bind("<Enter>", lambda e: self["state"] != "disabled" and self.configure(bg=hover))
-        self.bind("<Leave>", lambda e: self.configure(bg=bg))
-        self.bind("<Button-1>", lambda e: self["state"] != "disabled" and self._command())
+        self._enabled = True
+        self.is_rounded = True
+        self.bind("<Enter>", lambda e: self._enabled and self.itemconfigure(self._shape, fill=hover))
+        self.bind("<Leave>", lambda e: self._enabled and self.itemconfigure(self._shape, fill=fill))
+        self.bind("<Button-1>", lambda e: self._enabled and self._command())
 
     def set_enabled(self, enabled: bool):
-        bg, fg, _ = self._colors
-        self.configure(state="normal" if enabled else "disabled", bg=bg if enabled else RULE,
-                       fg=fg, disabledforeground=FAINT, cursor="hand2" if enabled else "arrow")
+        fill, fg, _, border = self._colors
+        self._enabled = enabled
+        self.configure(state="normal" if enabled else "disabled", cursor="hand2" if enabled else "arrow")
+        self.itemconfigure(self._shape, fill=fill if enabled else "#D9DEE3",
+                           outline=border if enabled else "#D9DEE3")
+        self.itemconfigure(self._label, fill=fg if enabled else FAINT)
+
+
+class RoundPanel(tk.Canvas):
+    """테두리 없이 모서리만 둥근 바탕. 내용은 self.inner(Frame)에 넣는다.
+    fit=False면 부모가 정한 크기를 채우고, fit=True면 내용 크기에 맞춘다."""
+
+    def __init__(self, master, fill, bg, radius=16, pad=None, fit=False):
+        super().__init__(master, bg=bg, highlightthickness=0, bd=0)
+        self.fill = fill
+        self.radius = radius
+        self.pad = pad if pad is not None else max(4, radius // 2)
+        self.inner = tk.Frame(self, bg=fill)
+        self._window = self.create_window(self.pad, self.pad, anchor="nw", window=self.inner)
+        self._shape = None
+        self.is_rounded = True
+        if fit:
+            self.inner.bind("<Configure>", lambda e: self._fit(), add="+")
+        else:
+            self.bind("<Configure>", self._stretch, add="+")
+
+    def _draw(self, w, h):
+        if self._shape:
+            self.delete(self._shape)
+        self._shape = _round_rect(self, 0, 0, w - 1, h - 1, min(self.radius, h // 2), fill=self.fill,
+                                  outline=self.fill)
+        self.tag_lower(self._shape)
+
+    def _stretch(self, event):
+        self.itemconfigure(self._window, width=max(1, event.width - 2 * self.pad),
+                           height=max(1, event.height - 2 * self.pad))
+        self._draw(event.width, event.height)
+
+    def _fit(self):
+        w = self.inner.winfo_reqwidth() + 2 * self.pad
+        h = self.inner.winfo_reqheight() + 2 * self.pad
+        self.configure(width=w, height=h)
+        self._draw(w, h)
+
+
+class Segmented(tk.Canvas):
+    """알약 모양 선택 버튼 (예: 16회 | 8회). 선택된 칸만 진하게 채운다."""
+
+    def __init__(self, master, values, variable: tk.StringVar, fonts, bg, suffix="회"):
+        measure = tkfont.Font(font=fonts.sign)
+        self.values = list(values)
+        self.labels = [f"{v}{suffix}" for v in self.values]
+        self.seg_w = max(measure.measure(t) for t in self.labels) + 30
+        self.h = measure.metrics("linespace") + 14
+        w = self.seg_w * len(self.values) + 6
+        super().__init__(master, width=w, height=self.h, bg=bg, highlightthickness=0, bd=0, cursor="hand2")
+        self.variable = variable
+        self.font = fonts.sign
+        self.is_rounded = True
+        _round_rect(self, 0, 0, w - 1, self.h - 1, self.h // 2, fill="#DDE2E7", outline="#DDE2E7")
+        self.bind("<Button-1>", self._click)
+        variable.trace_add("write", lambda *_: self._redraw())
+        self._redraw()
+
+    @property
+    def selected(self) -> str:
+        return self.variable.get()
+
+    def select(self, value: str):
+        self.variable.set(value)
+
+    def _click(self, event):
+        index = min(len(self.values) - 1, max(0, (event.x - 3) // self.seg_w))
+        self.select(self.values[index])
+
+    def _redraw(self):
+        self.delete("seg")
+        for i, (value, label) in enumerate(zip(self.values, self.labels)):
+            x1 = 3 + i * self.seg_w
+            active = value == self.variable.get()
+            if active:
+                _round_rect(self, x1, 3, x1 + self.seg_w, self.h - 4, (self.h - 7) // 2, fill=STEEL,
+                            outline=STEEL, tags=("seg",))
+            self.create_text(x1 + self.seg_w // 2, self.h // 2, text=label, font=self.font,
+                             fill="#FFFFFF" if active else MUTED, tags=("seg",))
+
+
+class Switch(tk.Canvas):
+    """켜고 끄는 스위치. 켜지면 빨강 트랙에 손잡이가 오른쪽으로."""
+
+    W, H = 42, 24
+
+    def __init__(self, master, variable: tk.BooleanVar, bg, on_color):
+        super().__init__(master, width=self.W, height=self.H, bg=bg, highlightthickness=0, bd=0, cursor="hand2")
+        self.variable = variable
+        self.on_color = on_color
+        self.bind("<Button-1>", lambda e: self.toggle())
+        variable.trace_add("write", lambda *_: self._redraw())
+        self._redraw()
+
+    @property
+    def on(self) -> bool:
+        return bool(self.variable.get())
+
+    def toggle(self):
+        self.variable.set(not self.on)
+
+    def _redraw(self):
+        self.delete("all")
+        track = self.on_color if self.on else "#C9D0D7"
+        _round_rect(self, 0, 0, self.W - 1, self.H - 1, self.H // 2, fill=track, outline=track)
+        x = self.W - self.H + 2 if self.on else 2
+        self.create_oval(x, 2, x + self.H - 5, self.H - 3, fill="#FFFFFF", outline="#FFFFFF")
 
 
 class Bubble(tk.Canvas):
@@ -126,31 +250,27 @@ class Bubble(tk.Canvas):
         self.is_rounded = True
 
 
-def _round_rect(canvas, x1, y1, x2, y2, r, **kw):
-    pts = [x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r, x2, y2 - r, x2, y2, x2 - r, y2,
-           x1 + r, y2, x1, y2, x1, y2 - r, x1, y1 + r, x1, y1]
-    return canvas.create_polygon(pts, smooth=True, **kw)
-
-
-class AndonCard(tk.Frame):
-    """판정 카드: 왼쪽 신호등 탑(위에서부터 빨강·주황·초록)에서 판정에 해당하는 등 하나만 켠다."""
+class AndonCard(RoundPanel):
+    """판정 카드: 왼쪽 신호등 기둥(위에서부터 빨강·주황·초록)에서 판정에 해당하는 등 하나만 켠다."""
 
     def __init__(self, master, verdict: Verdict, fonts: Fonts):
-        super().__init__(master, bg=SURFACE, highlightthickness=1, highlightbackground=RULE)
+        super().__init__(master, fill=SURFACE, bg=CHAT_BG, radius=16, pad=12, fit=True)
         self.status = verdict.status
         self.lit, color = STATUS_STYLE[verdict.status]
+        box = self.inner
 
-        tower = tk.Canvas(self, width=40, height=110, bg=STEEL, highlightthickness=0, bd=0)
-        tower.pack(side="left", fill="y")
+        tower = tk.Canvas(box, width=36, height=104, bg=SURFACE, highlightthickness=0, bd=0)
+        tower.pack(side="left", anchor="n")
         self.tower = tower
+        _round_rect(tower, 0, 0, 35, 103, 17, fill=STEEL, outline=STEEL)
         for i, name in enumerate(("red", "amber", "green")):
             on = name == self.lit
-            y = 16 + i * 30
-            tower.create_oval(9, y, 31, y + 22, fill=ANDON[name] if on else LAMP_OFF,
-                              outline=SURFACE if on else STEEL_SOFT, width=2 if on else 1)
+            y = 9 + i * 31
+            tower.create_oval(7, y, 29, y + 22, fill=ANDON[name] if on else LAMP_OFF,
+                              outline=ANDON[name] if on else LAMP_OFF)
 
-        body = tk.Frame(self, bg=SURFACE)
-        body.pack(side="left", fill="both", padx=(16, 18), pady=(10, 12))
+        body = tk.Frame(box, bg=SURFACE)
+        body.pack(side="left", fill="both", padx=(16, 6))
         head = tk.Frame(body, bg=SURFACE)
         head.pack(anchor="w")
         self.status_label = tk.Label(head, text=verdict.status, bg=SURFACE, fg=color, font=fonts.verdict)
@@ -177,6 +297,18 @@ class AndonCard(tk.Frame):
                     row=r_i, column=c_i, sticky="e", padx=(0, 18))
         tk.Label(body, text="설비와 인력은 확인하지 않았습니다.", bg=SURFACE, fg=FAINT, font=fonts.small).pack(
             anchor="w", pady=(8, 0))
+
+
+def _autohide(scrollbar: ttk.Scrollbar, widget: tk.Widget):
+    """내용이 넘칠 때만 스크롤바를 보이게 하는 yscrollcommand. 스크롤바는 widget 오른쪽에 붙는다."""
+    def set_view(first, last):
+        if float(first) <= 0.0 and float(last) >= 1.0:
+            if scrollbar.winfo_manager():
+                scrollbar.pack_forget()
+        elif not scrollbar.winfo_manager():
+            scrollbar.pack(side="right", fill="y", before=widget)
+        scrollbar.set(first, last)
+    return set_view
 
 
 def _fmt_args(args: dict, name: str = "") -> str:
@@ -252,7 +384,8 @@ class MaterialApp(tk.Frame):
         f = self.fonts
         style.configure("Trace.Treeview", background=SURFACE, fieldbackground=SURFACE, foreground=TEXT,
                         bordercolor=SURFACE, rowheight=30, font=f.body, indent=14)
-        style.map("Trace.Treeview", background=[("selected", FLOOR)], foreground=[("selected", TEXT)])
+        style.map("Trace.Treeview", background=[("selected", "#EEF1F4")], foreground=[("selected", TEXT)])
+        style.layout("Trace.Treeview", [("Treeview.treearea", {"sticky": "nswe"})])  # 목록 자체 테두리 없음
         # 스크롤바: Tk는 투명도를 지원하지 않으므로 막대를 배경과 거의 같은 옅은 색·좁은 폭으로 그려
         # 투명해 보이게 하고, 마우스를 올렸을 때만 진하게 한다. (흰 영역용 Slim, 하늘색 대화창용 Chat)
         for name, trough, thumb, active in (("Slim.Vertical.TScrollbar", SURFACE, "#E8EBEF", "#B9C1CA"),
@@ -286,55 +419,53 @@ class MaterialApp(tk.Frame):
                  fg="#AEB7C2", font=f.small).pack(side="left", padx=(24, 0))
 
     def _build_controls(self):
+        """헤더 아래 조작 줄: 바닥색 위에 둥근 버튼·선택 버튼·스위치만 (테두리 없음)."""
         f = self.fonts
-        strip = tk.Frame(self, bg=SURFACE, highlightthickness=1, highlightbackground=RULE)
-        strip.pack(fill="x")
-        inner = tk.Frame(strip, bg=SURFACE)
-        inner.pack(fill="x", padx=24, pady=9)
-        Button(inner, "새 대화", self.new_conversation, font=f.body).pack(side="left")
+        bar = tk.Frame(self, bg=FLOOR)
+        bar.pack(fill="x", padx=24, pady=(16, 0))
+        self.new_button = RoundButton(bar, "새 대화", self.new_conversation, font=f.body_bold, bg=FLOOR)
+        self.new_button.pack(side="left")
 
-        tk.Label(inner, text="질문당 실행 한도", bg=SURFACE, fg=MUTED, font=f.small_bold).pack(side="left", padx=(28, 8))
+        tk.Label(bar, text="질문당 실행 한도", bg=FLOOR, fg=MUTED, font=f.small_bold).pack(side="left", padx=(28, 10))
         default = str(self.settings.max_tool_calls)
         self.limit_var = tk.StringVar(value=default)
-        seg = tk.Frame(inner, bg=RULE, padx=2, pady=2)
-        seg.pack(side="left")
-        self._limit_tabs = {}
-        for value in dict.fromkeys((default, *LIMIT_CHOICES)):
-            tab = tk.Label(seg, text=f"{value}회", font=f.sign, padx=14, pady=3, cursor="hand2")
-            tab.pack(side="left")
-            tab.bind("<Button-1>", lambda e, v=value: self.limit_var.set(v))
-            self._limit_tabs[value] = tab
-        self.limit_var.trace_add("write", lambda *_: self._paint_limit())
-        self._paint_limit()
+        self.limit_control = Segmented(bar, dict.fromkeys((default, *LIMIT_CHOICES)), self.limit_var, f, FLOOR)
+        self.limit_control.pack(side="left")
 
         self.fail_var = tk.BooleanVar(value=False)
-        self.fail_toggle = tk.Label(inner, font=f.body_bold, padx=12, pady=4, cursor="hand2", highlightthickness=1)
-        self.fail_toggle.pack(side="left", padx=(28, 8))
-        self.fail_toggle.bind("<Button-1>", lambda e: self.fail_var.set(not self.fail_var.get()))
+        self.fail_switch = Switch(bar, self.fail_var, FLOOR, ANDON["red"])
+        self.fail_switch.pack(side="left", padx=(32, 8))
+        self.fail_label = tk.Label(bar, text="입고 조회 실패 모드", bg=FLOOR, fg=TEXT, font=f.body_bold, cursor="hand2")
+        self.fail_label.pack(side="left")
+        self.fail_label.bind("<Button-1>", lambda e: self.fail_switch.toggle())
+        tk.Label(bar, text="켜면 입고 예정 조회가 실패합니다 (대화 5 시연용)", bg=FLOOR, fg=FAINT,
+                 font=f.small).pack(side="left", padx=(10, 0))
         self.fail_var.trace_add("write", lambda *_: self._apply_fail_mode())
-        self._paint_fail()
-        tk.Label(inner, text="켜면 입고 예정 조회가 실패합니다", bg=SURFACE, fg=FAINT, font=f.small).pack(side="left")
 
     def _build_body(self):
         f = self.fonts
         body = tk.Frame(self, bg=FLOOR)
-        body.pack(fill="both", expand=True, padx=24, pady=18)
+        body.pack(fill="both", expand=True, padx=24, pady=16)
         body.columnconfigure(0, weight=3, uniform="col")
         body.columnconfigure(1, weight=2, uniform="col")
         body.rowconfigure(0, weight=1)
 
-        # 왼쪽: 카톡형 대화창 + 입력줄
-        left = tk.Frame(body, bg=CHAT_BG)
-        left.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
-        input_row = tk.Frame(left, bg=SURFACE)
-        input_row.pack(side="bottom", fill="x")
-        self.send_button = Button(input_row, "보내기", self.send, kind="primary", font=f.body_bold)
-        self.send_button.pack(side="right", padx=10, pady=10)
-        box = tk.Frame(input_row, bg=SURFACE, highlightthickness=1, highlightbackground=RULE, highlightcolor=STEEL)
-        box.pack(side="left", fill="x", expand=True, padx=(12, 0), pady=10)
+        # 왼쪽: 카톡형 대화창 (둥근 하늘색 패널) + 둥근 입력창·보내기
+        self.chat_panel = RoundPanel(body, fill=CHAT_BG, bg=FLOOR, radius=18, pad=10)
+        self.chat_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        left = self.chat_panel.inner
+        input_row = tk.Frame(left, bg=CHAT_BG)
+        input_row.pack(side="bottom", fill="x", padx=6, pady=(8, 4))
+        self.send_button = RoundButton(input_row, "보내기", self.send, kind="primary", font=f.body_bold, bg=CHAT_BG,
+                                       pady=10)
+        self.send_button.pack(side="right", padx=(8, 0))
+        self.entry_pill = RoundPanel(input_row, fill=SURFACE, bg=CHAT_BG, radius=20, pad=8)
+        self.entry_pill.configure(height=42)
+        self.entry_pill.pack(side="left", fill="x", expand=True)
+        box = self.entry_pill.inner
         self.entry = tk.Entry(box, font=f.chat, relief="flat", bg=SURFACE, fg=TEXT, insertbackground=TEXT,
-                              disabledbackground=FLOOR)
-        self.entry.pack(fill="x", padx=10, pady=7)
+                              disabledbackground=SURFACE, highlightthickness=0)
+        self.entry.pack(fill="both", expand=True, padx=8)
         self.entry.bind("<Return>", lambda _e: self.send())
         # 비어 있을 때만 보이는 안내 문구 (누르면 입력칸으로 초점 이동)
         self.placeholder = tk.Label(box, text="질문을 입력하세요. 예: 내일 오후 4시에 P-100을 20개 만들 수 있을까?",
@@ -343,45 +474,48 @@ class MaterialApp(tk.Frame):
         self.entry.bind("<KeyRelease>", lambda _e: self._update_placeholder(), add="+")
         self._update_placeholder()
 
-        self.chat = tk.Text(left, wrap="word", font=f.chat, state="disabled", padx=14, pady=14,
+        chat_box = tk.Frame(left, bg=CHAT_BG)
+        chat_box.pack(fill="both", expand=True)
+        self.chat = tk.Text(chat_box, wrap="word", font=f.chat, state="disabled", padx=10, pady=8,
                             bg=CHAT_BG, fg=TEXT, relief="flat", highlightthickness=0, cursor="arrow")
-        scroll = ttk.Scrollbar(left, command=self.chat.yview, style="Chat.Vertical.TScrollbar")
-        self.chat.configure(yscrollcommand=scroll.set)
-        scroll.pack(side="right", fill="y")
+        scroll = ttk.Scrollbar(chat_box, command=self.chat.yview, style="Chat.Vertical.TScrollbar")
         self.chat.pack(side="left", fill="both", expand=True)
+        self.chat.configure(yscrollcommand=_autohide(scroll, self.chat))
         self._configure_chat_tags()
 
-        # 오른쪽: 조회 순서(도구 실행 기록) + 선택한 단계의 원문
-        right = tk.Frame(body, bg=SURFACE, highlightthickness=1, highlightbackground=RULE)
-        right.grid(row=0, column=1, sticky="nsew", padx=(12, 0))
-        tk.Label(right, text="조회 순서", bg=SURFACE, fg=TEXT, font=f.title).pack(anchor="w", padx=18, pady=(14, 0))
+        # 오른쪽: 조회 순서 + 선택한 단계의 원문 (둥근 흰 패널 하나, 안쪽 상자 없음)
+        self.trace_panel = RoundPanel(body, fill=SURFACE, bg=FLOOR, radius=18, pad=10)
+        self.trace_panel.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
+        right = self.trace_panel.inner
+        tk.Label(right, text="조회 순서", bg=SURFACE, fg=TEXT, font=f.title).pack(anchor="w", padx=12, pady=(8, 0))
         tk.Label(right, text="Claude가 고른 도구가 실행된 순서입니다. 줄을 누르면 아래에 입력과 결과가 보입니다.",
-                 bg=SURFACE, fg=MUTED, font=f.small, wraplength=420, justify="left").pack(anchor="w", padx=18,
+                 bg=SURFACE, fg=MUTED, font=f.small, wraplength=420, justify="left").pack(anchor="w", padx=12,
                                                                                          pady=(2, 8))
-        # 조회 순서(위)와 원문(아래)은 가운데 경계선을 끌어 높이를 조절한다
-        self.right_panes = tk.PanedWindow(right, orient="vertical", bg=RULE, bd=0, sashwidth=6,
+        # 조회 순서(위)와 원문(아래)은 사이 간격을 끌어 높이를 조절한다 (회색 막대 대신 같은 흰 바탕)
+        self.right_panes = tk.PanedWindow(right, orient="vertical", bg=SURFACE, bd=0, sashwidth=14,
                                           sashrelief="flat", sashcursor="sb_v_double_arrow", showhandle=False)
         self.right_panes.pack(fill="both", expand=True)
-        tree_box = tk.Frame(self.right_panes, bg=SURFACE, padx=0)  # 스크롤바를 오른쪽 끝에 붙여 아래 원문 칸과 맞춘다
+        tree_box = tk.Frame(self.right_panes, bg=SURFACE)
         self.right_panes.add(tree_box, minsize=120, stretch="always", height=380)
         self.tool_tree = ttk.Treeview(tree_box, show="tree", selectmode="browse", style="Trace.Treeview")
         tree_scroll = ttk.Scrollbar(tree_box, command=self.tool_tree.yview, style="Slim.Vertical.TScrollbar")
-        self.tool_tree.configure(yscrollcommand=tree_scroll.set)
-        tree_scroll.pack(side="right", fill="y")
         self.tool_tree.pack(side="left", fill="both", expand=True)
+        self.tool_tree.configure(yscrollcommand=_autohide(tree_scroll, self.tool_tree))
         self.tool_tree.tag_configure("error", foreground=ANDON["red"])
         self.tool_tree.tag_configure("group", font=f.small_bold, foreground=MUTED)
         self.tool_tree.bind("<<TreeviewSelect>>", lambda _e: self._show_detail())
 
         detail_box = tk.Frame(self.right_panes, bg=SURFACE)
         self.right_panes.add(detail_box, minsize=100, stretch="always")
-        self.detail = tk.Text(detail_box, wrap="none", font=f.mono, height=9, state="disabled", bg=SURFACE,
-                              fg=TEXT, relief="flat", padx=18, pady=10)
-        self.detail_scroll = ttk.Scrollbar(detail_box, orient="vertical", command=self.detail.yview,
+        tk.Label(detail_box, text="입력과 결과", bg=SURFACE, fg=TEXT, font=f.small_bold).pack(anchor="w", padx=12)
+        detail_row = tk.Frame(detail_box, bg=SURFACE)
+        detail_row.pack(fill="both", expand=True)
+        self.detail = tk.Text(detail_row, wrap="none", font=f.mono, height=9, state="disabled", bg=SURFACE,
+                              fg=TEXT, relief="flat", padx=12, pady=6, highlightthickness=0)
+        self.detail_scroll = ttk.Scrollbar(detail_row, orient="vertical", command=self.detail.yview,
                                            style="Slim.Vertical.TScrollbar")
-        self.detail.configure(yscrollcommand=self.detail_scroll.set)
-        self.detail_scroll.pack(side="right", fill="y")
         self.detail.pack(side="left", fill="both", expand=True)
+        self.detail.configure(yscrollcommand=_autohide(self.detail_scroll, self.detail))
         self._set_text(self.detail, "선택한 단계의 입력과 결과가 여기에 표시됩니다.")
 
     def _configure_chat_tags(self):
@@ -400,17 +534,6 @@ class MaterialApp(tk.Frame):
             self.placeholder.place_forget()
         else:
             self.placeholder.place(x=11, rely=0.5, anchor="w")
-
-    def _paint_limit(self):
-        for value, tab in self._limit_tabs.items():
-            active = value == self.limit_var.get()
-            tab.configure(bg=STEEL if active else RULE, fg="#FFFFFF" if active else MUTED)
-
-    def _paint_fail(self):
-        on = bool(self.fail_var.get())
-        self.fail_toggle.configure(text=("입고 조회 실패 모드 켜짐" if on else "입고 조회 실패 모드"),
-                                   bg=ANDON["red"] if on else SURFACE, fg="#FFFFFF" if on else MUTED,
-                                   highlightbackground=ANDON["red"] if on else RULE)
 
     # ---------- 동작 ----------
     def send(self) -> None:
@@ -460,7 +583,6 @@ class MaterialApp(tk.Frame):
         self._append_meta("새 대화를 시작했습니다.", "meta")
 
     def _apply_fail_mode(self):
-        self._paint_fail()
         if self.agent is not None:
             self.agent.toolbox.inbound_fails = bool(self.fail_var.get())
 
@@ -519,7 +641,7 @@ class MaterialApp(tk.Frame):
     def _render_verdict(self, verdict: Verdict) -> None:
         """안돈 판정 카드: 에이전트 말풍선 아래에 이어 붙는다 (프로필 자리만큼 들여쓰기)."""
         row = tk.Frame(self.chat, bg=CHAT_BG)
-        tk.Frame(row, bg=CHAT_BG, width=48).pack(side="left")
+        tk.Frame(row, bg=CHAT_BG, width=44).pack(side="left")
         card = AndonCard(row, verdict, self.fonts)
         card.pack(side="left")
         self.verdict_cards.append(card)
@@ -579,8 +701,10 @@ class MaterialApp(tk.Frame):
             return
         # 빈 줄은 없애고, **로 시작하는 줄(결론)은 굵게, 별표는 지운다
         lines = [line.rstrip() for line in text.splitlines() if line.strip()] or ["(답변 없음)"]
-        tk.Label(row, text="자", bg=STEEL, fg="#FFFFFF", font=f.title, width=3, pady=6).pack(
-            side="left", anchor="n", padx=(0, 8))
+        avatar = tk.Canvas(row, width=36, height=36, bg=CHAT_BG, highlightthickness=0, bd=0)
+        avatar.create_oval(1, 1, 35, 35, fill=STEEL, outline=STEEL)
+        avatar.create_text(18, 18, text="자", fill="#FFFFFF", font=f.title)
+        avatar.pack(side="left", anchor="n", padx=(0, 8))
         col = tk.Frame(row, bg=CHAT_BG)
         col.pack(side="left")
         tk.Label(col, text="자재 에이전트", bg=CHAT_BG, fg=TEXT, font=f.small).pack(anchor="w", pady=(0, 3))
