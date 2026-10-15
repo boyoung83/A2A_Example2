@@ -1,12 +1,15 @@
-"""자재대응 Agent 데모 앱 (tkinter): 왼쪽 대화, 오른쪽 도구 실행 기록, 답변 아래 판정 카드.
+"""자재대응 Agent 데모 앱 (tkinter).
 
-디자인은 직전 프로젝트(교대 인수인계 앱)와 같은 체계: 어두운 상단 헤더, 흰 카드, 슬레이트 계열 글자색, 상태별 강조색.
+디자인 방향 (frontend-design 스킬로 정함): 생산 현장의 안돈(Andon) 신호등.
+- 판정은 라인 경고등처럼 빨강·주황·초록 중 한 칸만 켠 카드로 보여준다 (화면에서 유일하게 강조하는 요소).
+- 나머지는 강철 헤더, 작업장 바닥색 배경으로 조용하게. 대화창은 카카오톡형 (사용자 요청).
+- 오른쪽 도구 기록은 실제 실행 순서이므로 번호(①②③)를 붙인 순서 목록으로 보여준다.
 """
 import json
 import queue
 import threading
-from datetime import datetime
 import tkinter as tk
+from datetime import datetime
 from tkinter import font as tkfont
 from tkinter import ttk
 
@@ -16,33 +19,30 @@ from material_agent.data import load_dataset
 from material_agent.tools import ToolBox
 from material_agent.verdict import Verdict, build_verdict
 
-BG = "#F3F5F9"
+# 색 — 강철 · 작업장 바닥 · 안돈 신호 · 카톡 대화창
+STEEL = "#2B3440"
+STEEL_SOFT = "#3A4553"
+FLOOR = "#E9ECEF"
 SURFACE = "#FFFFFF"
-SUBTLE = "#F8FAFC"
-BORDER = "#E2E8F0"
-TEXT = "#0F172A"
-MUTED = "#64748B"
-FAINT = "#94A3B8"
-PRIMARY = "#2563EB"
-PRIMARY_HOVER = "#1D4ED8"
-PRIMARY_SOFT = "#EFF6FF"
+RULE = "#D5DAE0"
+TEXT = "#1F2730"
+MUTED = "#5F6B78"
+FAINT = "#98A2AE"
+ANDON = {"red": "#D63A2F", "amber": "#E8A317", "green": "#1E9E5A"}
+LAMP_OFF = "#4A5563"
+STATUS_STYLE = {  # 판정: (켜는 등, 글자색)
+    "가능": ("green", ANDON["green"]),
+    "조건부 가능": ("amber", "#B9790A"),
+    "불가": ("red", ANDON["red"]),
+    "확인 불가": (None, "#6B7785"),
+}
 CHAT_BG = "#B2C7DA"       # 카카오톡 대화방 배경
-USER_BUBBLE = "#FEE500"   # 내 말풍선 (카카오톡 노랑)
+USER_BUBBLE = "#FEE500"   # 내 말풍선
 AGENT_BUBBLE = "#FFFFFF"  # 상대 말풍선
 CHAT_MUTED = "#4B5563"
 BUBBLE_WRAP = 460
-HEADER = "#0F172A"
-HEADER_MUTED = "#94A3B8"
-HEADER_RAISED = "#1E293B"
-DANGER = "#DC2626"
-DANGER_SOFT = "#FEF2F2"
-STATUS_COLORS = {  # 판정: (강조색, 옅은 배경)
-    "가능": ("#059669", "#F0FDF4"),
-    "조건부 가능": ("#D97706", "#FFFBEB"),
-    "불가": ("#DC2626", "#FEF2F2"),
-    "확인 불가": ("#475569", "#F1F5F9"),
-}
 LIMIT_CHOICES = ("16", "8")
+CIRCLED = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳"
 
 
 class Fonts:
@@ -50,25 +50,30 @@ class Fonts:
         families = set(tkfont.families(root))
         base = next((f for f in ("Malgun Gothic", "맑은 고딕", "Apple SD Gothic Neo", "Noto Sans KR")
                      if f in families), "TkDefaultFont")
-        mono = next((f for f in ("D2Coding", "Consolas", "Menlo") if f in families), "TkFixedFont")
-        self.brand = (base, 15, "bold")
-        self.title = (base, 12, "bold")
-        self.verdict = (base, 13, "bold")
+        # 수량·판정·도구 이름: 산업 표지판 계열 Bahnschrift (Windows 기본 글꼴), 없으면 본문 글꼴
+        sign = "Bahnschrift" if "Bahnschrift" in families else base
+        mono = next((f for f in ("Consolas", "Menlo") if f in families), "TkFixedFont")
+        self.brand = (base, 14, "bold")
+        self.title = (base, 11, "bold")
         self.body = (base, 10)
         self.body_bold = (base, 10, "bold")
         self.chat = (base, 11)
         self.chat_bold = (base, 11, "bold")
         self.small = (base, 9)
         self.small_bold = (base, 9, "bold")
+        self.verdict = (base, 20, "bold")
+        self.figure = (sign, 13, "bold")
+        self.figure_small = (sign, 10)
+        self.sign = (sign, 10, "bold")
         self.mono = (mono, 9)
 
 
 class Button(tk.Label):
-    """평평한 버튼 (hover·비활성 상태 포함). 직전 프로젝트와 같은 모양."""
+    """평평한 버튼 (hover·비활성 상태 포함)."""
 
     STYLES = {
-        "primary": (PRIMARY, "#FFFFFF", PRIMARY_HOVER, PRIMARY),
-        "secondary": (SURFACE, TEXT, SUBTLE, BORDER),
+        "primary": (STEEL, "#FFFFFF", STEEL_SOFT, STEEL),
+        "secondary": (SURFACE, TEXT, FLOOR, RULE),
     }
 
     def __init__(self, master, text, command, kind="secondary", font=None, **kw):
@@ -83,7 +88,7 @@ class Button(tk.Label):
 
     def set_enabled(self, enabled: bool):
         bg, fg, _ = self._colors
-        self.configure(state="normal" if enabled else "disabled", bg=bg if enabled else BORDER,
+        self.configure(state="normal" if enabled else "disabled", bg=bg if enabled else RULE,
                        fg=fg, disabledforeground=FAINT, cursor="hand2" if enabled else "arrow")
 
 
@@ -92,8 +97,8 @@ class Bubble(tk.Canvas):
 
     RADIUS = 16
 
-    def __init__(self, master, lines: list[tuple[str, bool]], fill: str, fonts: "Fonts",
-                 wrap: int = 460, padx: int = 14, pady: int = 9, bg: str = "#B2C7DA"):
+    def __init__(self, master, lines: list[tuple[str, bool]], fill: str, fonts: Fonts,
+                 wrap: int = BUBBLE_WRAP, padx: int = 14, pady: int = 9, bg: str = CHAT_BG):
         super().__init__(master, bg=bg, highlightthickness=0, bd=0)
         self.lines = lines
         self.fill = fill
@@ -107,35 +112,76 @@ class Bubble(tk.Canvas):
             y = y2 + 3
         w, h = width + 2 * padx, y - 3 + pady
         self.configure(width=w, height=h)
-        shape = self._round_rect(1, 1, w - 1, h - 1, min(self.RADIUS, h // 2), fill=fill, outline=fill)
+        shape = _round_rect(self, 1, 1, w - 1, h - 1, min(self.RADIUS, h // 2), fill=fill, outline=fill)
         self.tag_lower(shape)
         self.is_rounded = True
 
-    def _round_rect(self, x1, y1, x2, y2, r, **kw):
-        pts = [x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r, x2, y2 - r, x2, y2, x2 - r, y2,
-               x1 + r, y2, x1, y2, x1, y2 - r, x1, y1 + r, x1, y1]
-        return self.create_polygon(pts, smooth=True, **kw)
+
+def _round_rect(canvas, x1, y1, x2, y2, r, **kw):
+    pts = [x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r, x2, y2 - r, x2, y2, x2 - r, y2,
+           x1 + r, y2, x1, y2, x1, y2 - r, x1, y1 + r, x1, y1]
+    return canvas.create_polygon(pts, smooth=True, **kw)
 
 
-class Card(tk.Frame):
-    def __init__(self, master, **kw):
-        super().__init__(master, bg=SURFACE, highlightthickness=1, highlightbackground=BORDER, **kw)
+class AndonCard(tk.Frame):
+    """판정 카드: 왼쪽 신호등 탑(위에서부터 빨강·주황·초록)에서 판정에 해당하는 등 하나만 켠다."""
+
+    def __init__(self, master, verdict: Verdict, fonts: Fonts):
+        super().__init__(master, bg=SURFACE, highlightthickness=1, highlightbackground=RULE)
+        self.status = verdict.status
+        self.lit, color = STATUS_STYLE[verdict.status]
+
+        tower = tk.Canvas(self, width=40, height=110, bg=STEEL, highlightthickness=0, bd=0)
+        tower.pack(side="left", fill="y")
+        self.tower = tower
+        for i, name in enumerate(("red", "amber", "green")):
+            on = name == self.lit
+            y = 16 + i * 30
+            tower.create_oval(9, y, 31, y + 22, fill=ANDON[name] if on else LAMP_OFF,
+                              outline=SURFACE if on else STEEL_SOFT, width=2 if on else 1)
+
+        body = tk.Frame(self, bg=SURFACE)
+        body.pack(side="left", fill="both", padx=(16, 18), pady=(10, 12))
+        head = tk.Frame(body, bg=SURFACE)
+        head.pack(anchor="w")
+        self.status_label = tk.Label(head, text=verdict.status, bg=SURFACE, fg=color, font=fonts.verdict)
+        self.status_label.pack(side="left")
+        tk.Label(head, text="자재 기준 판정", bg=SURFACE, fg=MUTED, font=fonts.small).pack(
+            side="left", anchor="s", padx=(10, 0), pady=(0, 6))
+
+        table = tk.Frame(body, bg=SURFACE)
+        table.pack(anchor="w", pady=(6, 0))
+        headers = ("부품", "필요", "재고", "시작 전 입고", "시작 시 부족")
+        for col, text in enumerate(headers):
+            tk.Label(table, text=text, bg=SURFACE, fg=FAINT, font=fonts.small).grid(
+                row=0, column=col, sticky="w" if col == 0 else "e", padx=(0, 18))
+        for r_i, r in enumerate(verdict.rows, start=1):
+            short = r.shortage_at_start > 0 or r.inbound_error
+            tk.Label(table, text=f"{r.part_name} {r.part_code}", bg=SURFACE, fg=TEXT, font=fonts.body_bold).grid(
+                row=r_i, column=0, sticky="w", padx=(0, 18), pady=1)
+            inbound = "조회 실패" if r.inbound_error else str(r.inbound_before_start)
+            values = (r.required, r.current_stock, inbound, r.shortage_at_start)
+            for c_i, value in enumerate(values, start=1):
+                hot = c_i == 4 and short
+                tk.Label(table, text=str(value), bg=SURFACE, fg=color if hot else TEXT,
+                         font=fonts.figure if hot else fonts.figure_small).grid(
+                    row=r_i, column=c_i, sticky="e", padx=(0, 18))
+        tk.Label(body, text="설비와 인력은 확인하지 않았습니다.", bg=SURFACE, fg=FAINT, font=fonts.small).pack(
+            anchor="w", pady=(8, 0))
 
 
-def card_header(card, fonts: Fonts, title: str, subtitle: str) -> tk.Frame:
-    head = tk.Frame(card, bg=SURFACE)
-    head.pack(fill="x", padx=18, pady=(14, 10))
-    actions = tk.Frame(head, bg=SURFACE)  # 버튼 영역을 먼저 배치해야 좁은 창에서도 잘리지 않는다
-    actions.pack(side="right", anchor="n")
-    text = tk.Frame(head, bg=SURFACE)
-    text.pack(side="left", fill="x", expand=True)
-    tk.Label(text, text=title, bg=SURFACE, fg=TEXT, font=fonts.title).pack(anchor="w")
-    tk.Label(text, text=subtitle, bg=SURFACE, fg=MUTED, font=fonts.small, anchor="w").pack(anchor="w", pady=(2, 0))
-    return actions
-
-
-def _fmt_args(args: dict) -> str:
-    return ", ".join(json.dumps(v, ensure_ascii=False) for v in args.values() if v is not None)
+def _fmt_args(args: dict, name: str = "") -> str:
+    """도구 기록용 짧은 입력 표시: 시각은 '10/16 09:00 시작', 부족량 계산은 부품과 생산 수량만."""
+    if name == "calculate_shortage":
+        return f"{args.get('part_code')}, {args.get('production_qty')}개"
+    parts = []
+    for key, value in args.items():
+        if value is None:
+            continue
+        if key == "production_start" and isinstance(value, str) and len(value) >= 16:
+            value = f"{value[5:10].replace('-', '/')} {value[11:16]} 시작"
+        parts.append(str(value))
+    return ", ".join(parts)
 
 
 def summarize(call: ToolCall) -> str:
@@ -150,20 +196,20 @@ def summarize(call: ToolCall) -> str:
     if call.name == "get_inventory":
         return f"{p['current_stock']}{p['unit']}" if p.get("found") else "등록되지 않은 부품"
     if call.name == "get_inbound_schedule":
-        rows = " / ".join(f"{r['arrival'][5:10].replace('-', '/')} {r['arrival'][11:16]} {r['qty']}개"
-                          for r in p.get("schedule", [])) or "입고 예정 없음"
+        rows = ", ".join(f"{r['arrival'][5:10].replace('-', '/')} {r['arrival'][11:16]} {r['qty']}개"
+                         for r in p.get("schedule", [])) or "입고 예정 없음"
         if "inbound_before_start_total" in p:
-            rows += f" → 시작 전 합계 {p['inbound_before_start_total']}개"
+            rows += f" (시작 전 {p['inbound_before_start_total']}개)"
         return rows
     if call.name == "calculate_shortage":
-        return f"필요 {p['required']} · 현재부족 {p['shortage_now']} · 시작기준부족 {p['shortage_at_start']}"
+        return f"필요 {p['required']}, 시작 시 부족 {p['shortage_at_start']}"
     return json.dumps(p, ensure_ascii=False)[:60]
 
 
 class MaterialApp(tk.Frame):
     def __init__(self, master, agent: MaterialAgent | None, settings: Settings,
                  startup_error: str | None = None, runner=None):
-        super().__init__(master, bg=BG)
+        super().__init__(master, bg=FLOOR)
         self.agent = agent
         self.settings = settings
         self.runner = runner or (lambda fn: threading.Thread(target=fn, daemon=True).start())
@@ -172,17 +218,22 @@ class MaterialApp(tk.Frame):
         self._queue: queue.Queue = queue.Queue()
         self._groups: dict[int, dict] = {}
         self._details: dict[str, ToolCall] = {}
+        self.user_bubbles: list[Bubble] = []
+        self.agent_bubbles: list[Bubble] = []
+        self.verdict_cards: list[AndonCard] = []
+        self._log: list[str] = []
         self.fonts = Fonts(self)
         self._setup_style()
-        self._build_header(startup_error)
-        self._build_toolbar()
+        self._build_header()
+        self._build_controls()
         self._build_body()
         if agent is None:
-            self._append_meta(f"⚠ {startup_error or '에이전트를 시작하지 못했습니다'}", "error")
+            self._append_meta(f"{startup_error or '에이전트를 시작하지 못했습니다'}", "error")
             self.send_button.set_enabled(False)
             self.entry.configure(state="disabled")
         else:
-            self._append_meta("생산 가능 여부를 물어보세요. 예: 내일 P-100을 20개 만들 수 있을까?", "meta")
+            self._append_meta("생산할 제품, 수량, 시작 시각을 물어보세요. 예: 내일 오후 4시에 P-100을 20개 만들 수 있을까?",
+                              "meta")
         self.after(100, self._poll)
 
     # ---------- 화면 구성 ----------
@@ -190,133 +241,126 @@ class MaterialApp(tk.Frame):
         style = ttk.Style(self)
         style.theme_use("clam")
         f = self.fonts
-        style.configure("Tool.Treeview", background=SURFACE, fieldbackground=SURFACE, foreground=TEXT,
-                        bordercolor=SURFACE, rowheight=28, font=f.body)
-        style.map("Tool.Treeview", background=[("selected", PRIMARY_SOFT)], foreground=[("selected", TEXT)])
+        style.configure("Trace.Treeview", background=SURFACE, fieldbackground=SURFACE, foreground=TEXT,
+                        bordercolor=SURFACE, rowheight=30, font=f.body, indent=14)
+        style.map("Trace.Treeview", background=[("selected", FLOOR)], foreground=[("selected", TEXT)])
         style.layout("Slim.Vertical.TScrollbar",
                      [("Vertical.Scrollbar.trough", {"sticky": "ns",
                        "children": [("Vertical.Scrollbar.thumb", {"expand": "1", "sticky": "nswe"})]})])
-        style.configure("Slim.Vertical.TScrollbar", troughcolor=SURFACE, background="#CBD5E1",
-                        bordercolor=SURFACE, lightcolor="#CBD5E1", darkcolor="#CBD5E1", width=8)
+        style.configure("Slim.Vertical.TScrollbar", troughcolor=SURFACE, background="#C4CBD3",
+                        bordercolor=SURFACE, lightcolor="#C4CBD3", darkcolor="#C4CBD3", width=8)
         style.map("Slim.Vertical.TScrollbar", background=[("active", FAINT)])
 
-    def _build_header(self, startup_error):
+    def _build_header(self):
         f = self.fonts
-        header = tk.Frame(self, bg=HEADER, height=64)
+        header = tk.Frame(self, bg=STEEL, height=56)
         header.pack(fill="x")
         header.pack_propagate(False)
-        brand = tk.Frame(header, bg=HEADER)
-        brand.pack(side="left", padx=24)
-        tk.Label(brand, text="자", bg=PRIMARY, fg="#FFFFFF", font=f.title, width=2, pady=2).pack(side="left", pady=16)
-        titles = tk.Frame(brand, bg=HEADER)
-        titles.pack(side="left", padx=12)
-        tk.Label(titles, text="자재대응 Agent", bg=HEADER, fg="#FFFFFF", font=f.brand).pack(anchor="w")
-        tk.Label(titles, text="생산 가능 여부를 자재 기준으로 확인합니다", bg=HEADER, fg=HEADER_MUTED,
-                 font=f.small).pack(anchor="w")
+        tk.Label(header, text="자재대응 Agent", bg=STEEL, fg="#FFFFFF", font=f.brand).pack(side="left", padx=(24, 12))
+        tk.Label(header, text="생산 가능 여부를 자재 기준으로 확인합니다", bg=STEEL, fg="#AEB7C2",
+                 font=f.small).pack(side="left", pady=(4, 0))
 
-        status = tk.Frame(header, bg=HEADER)
-        status.pack(side="right", padx=24)
-        dot, label = ("#34D399", "Claude API 연결 준비됨") if self.agent else ("#F87171", "API 키 없음 · .env 확인")
-        pill = tk.Frame(status, bg=HEADER_RAISED, padx=12, pady=5)
-        pill.pack(side="right")
-        tk.Label(pill, text="●", bg=HEADER_RAISED, fg=dot, font=f.small).pack(side="left")
-        self.status_label = tk.Label(pill, text=f" {label}", bg=HEADER_RAISED, fg="#E2E8F0", font=f.small_bold)
+        right = tk.Frame(header, bg=STEEL)
+        right.pack(side="right", padx=24)
+        dot = ANDON["green"] if self.agent else ANDON["red"]
+        label = f"Claude API 연결됨 ({MODEL})" if self.agent else "API 키 없음: .env를 확인하세요"
+        tk.Label(right, text="●", bg=STEEL, fg=dot, font=f.small).pack(side="left")
+        self.status_label = tk.Label(right, text=f" {label}", bg=STEEL, fg="#DDE2E8", font=f.small_bold)
         self.status_label.pack(side="left")
-        tk.Label(pill, text=f"  ·  {MODEL}", bg=HEADER_RAISED, fg=HEADER_MUTED, font=f.small).pack(side="left")
-        tk.Label(status, text=f"기준시각 {self.settings.base_time:%Y-%m-%d %H:%M}", bg=HEADER, fg=HEADER_MUTED,
-                 font=f.small).pack(side="right", padx=16)
+        base = self.settings.base_time
+        noon = "오전" if base.hour < 12 else "오후"
+        tk.Label(right, text=f"기준 {base.month}월 {base.day}일 {noon} {base.hour % 12 or 12}:{base:%M}", bg=STEEL,
+                 fg="#AEB7C2", font=f.small).pack(side="left", padx=(24, 0))
 
-    def _build_toolbar(self):
+    def _build_controls(self):
         f = self.fonts
-        bar = Card(self)
-        bar.pack(fill="x", padx=20, pady=(16, 0))
-        inner = tk.Frame(bar, bg=SURFACE)
-        inner.pack(fill="x", padx=18, pady=10)
+        strip = tk.Frame(self, bg=SURFACE, highlightthickness=1, highlightbackground=RULE)
+        strip.pack(fill="x")
+        inner = tk.Frame(strip, bg=SURFACE)
+        inner.pack(fill="x", padx=24, pady=9)
         Button(inner, "새 대화", self.new_conversation, font=f.body).pack(side="left")
 
-        tk.Label(inner, text="실행 한도", bg=SURFACE, fg=MUTED, font=f.small_bold).pack(side="left", padx=(24, 8))
+        tk.Label(inner, text="질문당 실행 한도", bg=SURFACE, fg=MUTED, font=f.small_bold).pack(side="left", padx=(28, 8))
         default = str(self.settings.max_tool_calls)
         self.limit_var = tk.StringVar(value=default)
-        seg = tk.Frame(inner, bg=BORDER, padx=3, pady=3)
+        seg = tk.Frame(inner, bg=RULE, padx=2, pady=2)
         seg.pack(side="left")
         self._limit_tabs = {}
         for value in dict.fromkeys((default, *LIMIT_CHOICES)):
-            tab = tk.Label(seg, text=f"{value}회", font=f.body_bold, padx=14, pady=4, cursor="hand2")
+            tab = tk.Label(seg, text=f"{value}회", font=f.sign, padx=14, pady=3, cursor="hand2")
             tab.pack(side="left")
             tab.bind("<Button-1>", lambda e, v=value: self.limit_var.set(v))
             self._limit_tabs[value] = tab
         self.limit_var.trace_add("write", lambda *_: self._paint_limit())
         self._paint_limit()
-        tk.Label(inner, text="질문 한 건당", bg=SURFACE, fg=FAINT, font=f.small).pack(side="left", padx=8)
 
         self.fail_var = tk.BooleanVar(value=False)
-        self.fail_toggle = tk.Label(inner, font=f.body_bold, padx=12, pady=5, cursor="hand2", highlightthickness=1)
-        self.fail_toggle.pack(side="left", padx=(24, 0))
+        self.fail_toggle = tk.Label(inner, font=f.body_bold, padx=12, pady=4, cursor="hand2", highlightthickness=1)
+        self.fail_toggle.pack(side="left", padx=(28, 8))
         self.fail_toggle.bind("<Button-1>", lambda e: self.fail_var.set(not self.fail_var.get()))
         self.fail_var.trace_add("write", lambda *_: self._apply_fail_mode())
         self._paint_fail()
-        tk.Label(inner, text="켜면 입고 예정 조회가 오류를 돌려줍니다 (대화 5 시연용)", bg=SURFACE, fg=FAINT,
-                 font=f.small).pack(side="left", padx=8)
+        tk.Label(inner, text="켜면 입고 예정 조회가 실패합니다", bg=SURFACE, fg=FAINT, font=f.small).pack(side="left")
 
     def _build_body(self):
         f = self.fonts
-        body = tk.Frame(self, bg=BG)
-        body.pack(fill="both", expand=True, padx=20, pady=16)
+        body = tk.Frame(self, bg=FLOOR)
+        body.pack(fill="both", expand=True, padx=24, pady=18)
         body.columnconfigure(0, weight=3, uniform="col")
         body.columnconfigure(1, weight=2, uniform="col")
         body.rowconfigure(0, weight=1)
 
-        chat_card = Card(body)
-        chat_card.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
-        card_header(chat_card, f, "대화", "질문하면 Claude가 필요한 도구를 골라 조회하고 답합니다")
-        input_row = tk.Frame(chat_card, bg=SURFACE)
-        input_row.pack(side="bottom", fill="x", padx=18, pady=(10, 16))
+        # 왼쪽: 카톡형 대화창 + 입력줄
+        left = tk.Frame(body, bg=CHAT_BG)
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        input_row = tk.Frame(left, bg=SURFACE)
+        input_row.pack(side="bottom", fill="x")
         self.send_button = Button(input_row, "보내기", self.send, kind="primary", font=f.body_bold)
-        self.send_button.pack(side="right", padx=(8, 0))
-        box = tk.Frame(input_row, bg=SURFACE, highlightthickness=1, highlightbackground=BORDER,
-                       highlightcolor=PRIMARY)
-        box.pack(side="left", fill="x", expand=True)
+        self.send_button.pack(side="right", padx=10, pady=10)
+        box = tk.Frame(input_row, bg=SURFACE, highlightthickness=1, highlightbackground=RULE, highlightcolor=STEEL)
+        box.pack(side="left", fill="x", expand=True, padx=(12, 0), pady=10)
         self.entry = tk.Entry(box, font=f.chat, relief="flat", bg=SURFACE, fg=TEXT, insertbackground=TEXT,
-                              disabledbackground=SUBTLE)
+                              disabledbackground=FLOOR)
         self.entry.pack(fill="x", padx=10, pady=7)
         self.entry.bind("<Return>", lambda _e: self.send())
+        # 비어 있을 때만 보이는 안내 문구 (누르면 입력칸으로 초점 이동)
+        self.placeholder = tk.Label(box, text="질문을 입력하세요. 예: 내일 오후 4시에 P-100을 20개 만들 수 있을까?",
+                                    bg=SURFACE, fg=FAINT, font=f.chat, cursor="xterm")
+        self.placeholder.bind("<Button-1>", lambda _e: self.entry.focus_set())
+        self.entry.bind("<KeyRelease>", lambda _e: self._update_placeholder(), add="+")
+        self._update_placeholder()
 
-        chat_box = tk.Frame(chat_card, bg=CHAT_BG)
-        chat_box.pack(fill="both", expand=True, padx=18)
-        self.chat = tk.Text(chat_box, wrap="word", font=f.chat, state="disabled", padx=12, pady=12,
+        self.chat = tk.Text(left, wrap="word", font=f.chat, state="disabled", padx=14, pady=14,
                             bg=CHAT_BG, fg=TEXT, relief="flat", highlightthickness=0, cursor="arrow")
-        scroll = ttk.Scrollbar(chat_box, command=self.chat.yview, style="Slim.Vertical.TScrollbar")
+        scroll = ttk.Scrollbar(left, command=self.chat.yview, style="Slim.Vertical.TScrollbar")
         self.chat.configure(yscrollcommand=scroll.set)
         scroll.pack(side="right", fill="y")
         self.chat.pack(side="left", fill="both", expand=True)
         self._configure_chat_tags()
 
-        right = tk.Frame(body, bg=BG)
-        right.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
-        right.rowconfigure(0, weight=3)
-        right.rowconfigure(1, weight=2)
-        right.columnconfigure(0, weight=1)
-
-        tool_card = Card(right)
-        tool_card.grid(row=0, column=0, sticky="nsew", pady=(0, 8))
-        card_header(tool_card, f, "도구 실행 기록", "Claude가 고른 도구와 결과 · 줄을 누르면 아래에 원문이 보입니다")
-        tree_box = tk.Frame(tool_card, bg=SURFACE)
-        tree_box.pack(fill="both", expand=True, padx=12, pady=(0, 12))
-        self.tool_tree = ttk.Treeview(tree_box, show="tree", selectmode="browse", style="Tool.Treeview")
+        # 오른쪽: 조회 순서(도구 실행 기록) + 선택한 단계의 원문
+        right = tk.Frame(body, bg=SURFACE, highlightthickness=1, highlightbackground=RULE)
+        right.grid(row=0, column=1, sticky="nsew", padx=(12, 0))
+        tk.Label(right, text="조회 순서", bg=SURFACE, fg=TEXT, font=f.title).pack(anchor="w", padx=18, pady=(14, 0))
+        tk.Label(right, text="Claude가 고른 도구가 실행된 순서입니다. 줄을 누르면 아래에 입력과 결과가 보입니다.",
+                 bg=SURFACE, fg=MUTED, font=f.small, wraplength=420, justify="left").pack(anchor="w", padx=18,
+                                                                                         pady=(2, 8))
+        tree_box = tk.Frame(right, bg=SURFACE)
+        tree_box.pack(fill="both", expand=True, padx=10)
+        self.tool_tree = ttk.Treeview(tree_box, show="tree", selectmode="browse", style="Trace.Treeview")
         tree_scroll = ttk.Scrollbar(tree_box, command=self.tool_tree.yview, style="Slim.Vertical.TScrollbar")
         self.tool_tree.configure(yscrollcommand=tree_scroll.set)
         tree_scroll.pack(side="right", fill="y")
         self.tool_tree.pack(side="left", fill="both", expand=True)
-        self.tool_tree.tag_configure("error", foreground=DANGER, background=DANGER_SOFT)
-        self.tool_tree.tag_configure("group", font=f.body_bold, foreground=PRIMARY)
+        self.tool_tree.tag_configure("error", foreground=ANDON["red"])
+        self.tool_tree.tag_configure("group", font=f.small_bold, foreground=MUTED)
         self.tool_tree.bind("<<TreeviewSelect>>", lambda _e: self._show_detail())
 
-        detail_card = Card(right)
-        detail_card.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
-        card_header(detail_card, f, "입력·결과 원문", "선택한 도구에 전달된 입력과 돌려받은 결과(JSON)")
-        self.detail = tk.Text(detail_card, wrap="none", font=f.mono, height=8, state="disabled", bg=SUBTLE,
-                              fg=TEXT, relief="flat", padx=12, pady=8)
-        self.detail.pack(fill="both", expand=True, padx=18, pady=(0, 16))
+        tk.Frame(right, bg=RULE, height=1).pack(fill="x", pady=(8, 0))
+        self.detail = tk.Text(right, wrap="none", font=f.mono, height=9, state="disabled", bg=SURFACE,
+                              fg=TEXT, relief="flat", padx=18, pady=10)
+        self.detail.pack(fill="x")
+        self._set_text(self.detail, "선택한 단계의 입력과 결과가 여기에 표시됩니다.")
 
     def _configure_chat_tags(self):
         """말풍선 줄 정렬과 가운데 알림 스타일. 말풍선 자체는 위젯으로 그린다."""
@@ -327,22 +371,24 @@ class MaterialApp(tk.Frame):
         c.tag_configure("meta", justify="center", foreground=CHAT_MUTED, font=f.small, spacing1=10)
         c.tag_configure("note", justify="center", foreground=CHAT_MUTED, font=f.small, spacing1=6)
         c.tag_configure("waiting", justify="center", foreground=TEXT, font=f.small_bold, spacing1=12)
-        c.tag_configure("error", justify="center", foreground=DANGER, font=f.body_bold, spacing1=10)
-        self.user_bubbles: list[Bubble] = []
-        self.agent_bubbles: list[Bubble] = []
-        self.verdict_badges: list[tk.Label] = []
-        self._log: list[str] = []
+        c.tag_configure("error", justify="center", foreground=ANDON["red"], font=f.body_bold, spacing1=10)
+
+    def _update_placeholder(self):
+        if self.entry.get():
+            self.placeholder.place_forget()
+        else:
+            self.placeholder.place(x=11, rely=0.5, anchor="w")
 
     def _paint_limit(self):
         for value, tab in self._limit_tabs.items():
             active = value == self.limit_var.get()
-            tab.configure(bg=SURFACE if active else BORDER, fg=TEXT if active else MUTED)
+            tab.configure(bg=STEEL if active else RULE, fg="#FFFFFF" if active else MUTED)
 
     def _paint_fail(self):
         on = bool(self.fail_var.get())
-        self.fail_toggle.configure(text=("● 입고 조회 실패 모드 켜짐" if on else "○ 입고 조회 실패 모드"),
-                                   bg=DANGER_SOFT if on else SURFACE, fg=DANGER if on else MUTED,
-                                   highlightbackground="#FECACA" if on else BORDER)
+        self.fail_toggle.configure(text=("입고 조회 실패 모드 켜짐" if on else "입고 조회 실패 모드"),
+                                   bg=ANDON["red"] if on else SURFACE, fg="#FFFFFF" if on else MUTED,
+                                   highlightbackground=ANDON["red"] if on else RULE)
 
     # ---------- 동작 ----------
     def send(self) -> None:
@@ -352,6 +398,7 @@ class MaterialApp(tk.Frame):
         if not text:
             return
         self.entry.delete(0, "end")
+        self._update_placeholder()
         self.turn_no += 1
         n, limit = self.turn_no, int(self.limit_var.get())
         self._append_message("나", text, "user")
@@ -378,7 +425,7 @@ class MaterialApp(tk.Frame):
         self._groups.clear()
         self._details.clear()
         self.tool_tree.delete(*self.tool_tree.get_children())
-        self._set_text(self.detail, "")
+        self._set_text(self.detail, "선택한 단계의 입력과 결과가 여기에 표시됩니다.")
         self.chat.configure(state="normal")
         self.chat.delete("1.0", "end")
         self.chat.configure(state="disabled")
@@ -386,9 +433,9 @@ class MaterialApp(tk.Frame):
             child.destroy()
         self.user_bubbles.clear()
         self.agent_bubbles.clear()
-        self.verdict_badges.clear()
+        self.verdict_cards.clear()
         self._log.clear()
-        self._append_meta("새 대화를 시작합니다.", "meta")
+        self._append_meta("새 대화를 시작했습니다.", "meta")
 
     def _apply_fail_mode(self):
         self._paint_fail()
@@ -414,16 +461,18 @@ class MaterialApp(tk.Frame):
     # ---------- 화면 갱신 ----------
     def _start_turn_group(self, n: int) -> None:
         limit = int(self.limit_var.get())
-        parent = self.tool_tree.insert("", "end", text=f"질문 {n} · 도구 0/{limit}회", open=True, tags=("group",))
+        parent = self.tool_tree.insert("", "end", text=f"질문 {n}   도구 0/{limit}회", open=True, tags=("group",))
         self._groups[n] = {"id": parent, "limit": limit, "count": 0}
 
     def _on_tool_call(self, n: int, call: ToolCall) -> None:
         group = self._groups[n]
         group["count"] += 1
-        text = f"{group['count']}. {call.name}({_fmt_args(call.args)}) → {summarize(call)}"
+        k = group["count"]
+        mark = CIRCLED[k - 1] if k <= len(CIRCLED) else f"({k})"
+        text = f"{mark} {call.name}({_fmt_args(call.args, call.name)})  →  {summarize(call)}"
         row = self.tool_tree.insert(group["id"], "end", text=text, tags=() if call.ok else ("error",))
         self._details[row] = call
-        self.tool_tree.item(group["id"], text=f"질문 {n} · 도구 {group['count']}/{group['limit']}회")
+        self.tool_tree.item(group["id"], text=f"질문 {n}   도구 {k}/{group['limit']}회")
         self.tool_tree.see(row)
 
     def _on_turn_done(self, n: int, result: TurnResult) -> None:
@@ -434,59 +483,41 @@ class MaterialApp(tk.Frame):
         if verdict:
             self._render_verdict(verdict)
         if result.limit_reached:
-            self._append_meta("※ 도구 실행 한도에 도달해 일부 조회를 실행하지 않았습니다", "note")
+            self._append_meta("도구 실행 한도에 도달해 일부 조회를 실행하지 않았습니다.", "note")
             group = self._groups.get(n)
             if group:
-                self.tool_tree.item(group["id"], text=self.tool_tree.item(group["id"], "text") + " (한도 도달)")
+                self.tool_tree.item(group["id"], text=self.tool_tree.item(group["id"], "text") + "  한도 도달")
         self._set_busy(False)
 
     def _on_turn_error(self, message: str) -> None:
         self._clear_waiting()
-        self._append_meta(f"⚠ {message}", "error")
+        self._append_meta(message, "error")
         self._set_busy(False)
 
     def _render_verdict(self, verdict: Verdict) -> None:
-        """판정 카드: 에이전트 말풍선에 이어 붙는 카드 메시지 (카톡의 연속 메시지처럼 프로필 생략)."""
-        f = self.fonts
-        s = verdict.status
-        accent, tint = STATUS_COLORS[s]
+        """안돈 판정 카드: 에이전트 말풍선 아래에 이어 붙는다 (프로필 자리만큼 들여쓰기)."""
         row = tk.Frame(self.chat, bg=CHAT_BG)
-        tk.Frame(row, bg=CHAT_BG, width=48).pack(side="left")  # 프로필 자리만큼 들여쓰기
-        card = tk.Frame(row, bg=AGENT_BUBBLE, highlightthickness=1, highlightbackground=accent)
+        tk.Frame(row, bg=CHAT_BG, width=48).pack(side="left")
+        card = AndonCard(row, verdict, self.fonts)
         card.pack(side="left")
-        head = tk.Frame(card, bg=tint)
-        head.pack(fill="x")
-        badge = tk.Label(head, text=f" {s} ", bg=accent, fg="#FFFFFF", font=f.verdict, padx=6)
-        badge.pack(side="left", padx=(12, 8), pady=8)
-        tk.Label(head, text="자재 기준 판정", bg=tint, fg=accent, font=f.title).pack(side="left", pady=8, padx=(0, 12))
-        self.verdict_badges.append(badge)
-        lines = [f"[판정 {s}] 자재 기준 판정"]
-        for r in verdict.rows:
-            item = tk.Frame(card, bg=AGENT_BUBBLE)
-            item.pack(fill="x", padx=14, pady=(8, 0))
-            short = r.shortage_at_start > 0 or r.inbound_error
-            tk.Label(item, text=f"{r.part_name} ({r.part_code})", bg=AGENT_BUBBLE,
-                     fg=accent if short else TEXT, font=f.body_bold).pack(anchor="w")
-            detail = (f"필요 {r.required} · 재고 {r.current_stock} · 반영 입고 {r.inbound_before_start} · "
-                      f"현재부족 {r.shortage_now} · 시작기준부족 {r.shortage_at_start}")
-            if r.inbound_error:
-                detail += " · 입고 조회 실패"
-            tk.Label(item, text=detail, bg=AGENT_BUBBLE, fg=MUTED, font=f.small).pack(anchor="w")
-            lines.append(f"{r.part_name}({r.part_code}) {detail}")
-        tk.Label(card, text="※ 자재 기준 판단 · 설비·인력은 확인하지 않음", bg=AGENT_BUBBLE, fg=FAINT,
-                 font=f.small).pack(anchor="w", padx=14, pady=(8, 10))
-        lines.append("※ 자재 기준 판단 · 설비·인력은 확인하지 않음")
+        self.verdict_cards.append(card)
         self._insert_row(row, "row_agent")
+        lines = [f"[판정 {verdict.status}] 자재 기준 판정"]
+        for r in verdict.rows:
+            lines.append(f"{r.part_name}({r.part_code}) 필요 {r.required}, 재고 {r.current_stock}, "
+                         f"시작 전 입고 {'조회 실패' if r.inbound_error else r.inbound_before_start}, "
+                         f"시작 시 부족 {r.shortage_at_start}")
+        lines.append("설비와 인력은 확인하지 않았습니다. (자재 기준 판단)")
         self._log.append("\n".join(lines))
 
     def _show_detail(self) -> None:
         selected = self.tool_tree.selection()
         call = self._details.get(selected[0]) if selected else None
         if call is None:
-            self._set_text(self.detail, "")
+            self._set_text(self.detail, "선택한 단계의 입력과 결과가 여기에 표시됩니다.")
             return
-        body = (f"{call.name} ({'성공' if call.ok else '오류'})\n\n입력:\n"
-                f"{json.dumps(call.args, ensure_ascii=False, indent=2)}\n\n결과:\n"
+        body = (f"{call.name} ({'성공' if call.ok else '오류'})\n\n입력\n"
+                f"{json.dumps(call.args, ensure_ascii=False, indent=2)}\n\n결과\n"
                 f"{json.dumps(call.payload, ensure_ascii=False, indent=2)}")
         self._set_text(self.detail, body)
 
@@ -495,7 +526,7 @@ class MaterialApp(tk.Frame):
         self.entry.configure(state="disabled" if busy else "normal")
         self.send_button.set_enabled(not busy)
         if busy:
-            self._append_meta("● Claude가 도구를 골라 확인하고 있습니다…", "waiting")
+            self._append_meta("Claude가 필요한 자료를 조회하고 있습니다…", "waiting")
         else:
             self.entry.focus_set()
 
@@ -518,7 +549,7 @@ class MaterialApp(tk.Frame):
         row = tk.Frame(self.chat, bg=CHAT_BG)
         if kind == "user":
             tk.Label(row, text=stamp, bg=CHAT_BG, fg=CHAT_MUTED, font=f.small).pack(side="left", anchor="s", padx=6)
-            bubble = Bubble(row, [(text, False)], USER_BUBBLE, f, wrap=BUBBLE_WRAP, bg=CHAT_BG)
+            bubble = Bubble(row, [(text, False)], USER_BUBBLE, f)
             bubble.pack(side="left")
             self.user_bubbles.append(bubble)
             self._insert_row(row, "row_user")
@@ -526,7 +557,7 @@ class MaterialApp(tk.Frame):
             return
         # 빈 줄은 없애고, **로 시작하는 줄(결론)은 굵게, 별표는 지운다
         lines = [line.rstrip() for line in text.splitlines() if line.strip()] or ["(답변 없음)"]
-        tk.Label(row, text="자", bg=PRIMARY, fg="#FFFFFF", font=f.title, width=3, pady=6).pack(
+        tk.Label(row, text="자", bg=STEEL, fg="#FFFFFF", font=f.title, width=3, pady=6).pack(
             side="left", anchor="n", padx=(0, 8))
         col = tk.Frame(row, bg=CHAT_BG)
         col.pack(side="left")
@@ -534,7 +565,7 @@ class MaterialApp(tk.Frame):
         line_row = tk.Frame(col, bg=CHAT_BG)
         line_row.pack(anchor="w")
         styled = [(line.replace("**", ""), line.lstrip().startswith("**")) for line in lines]
-        bubble = Bubble(line_row, styled, AGENT_BUBBLE, f, wrap=BUBBLE_WRAP, bg=CHAT_BG)
+        bubble = Bubble(line_row, styled, AGENT_BUBBLE, f)
         bubble.pack(side="left")
         tk.Label(line_row, text=stamp, bg=CHAT_BG, fg=CHAT_MUTED, font=f.small).pack(side="left", anchor="s", padx=6)
         self.agent_bubbles.append(bubble)
@@ -577,8 +608,8 @@ class MaterialApp(tk.Frame):
 
 def main() -> None:
     root = tk.Tk()
-    root.title("자재대응 Agent — 생산 가능 여부 확인")
-    root.configure(bg=BG)
+    root.title("자재대응 Agent")
+    root.configure(bg=FLOOR)
     root.geometry("1400x880")
     root.minsize(1100, 700)
     try:
@@ -593,7 +624,7 @@ def main() -> None:
         toolbox = ToolBox(load_dataset(), settings.base_time)
         agent = MaterialAgent(anthropic.Anthropic(api_key=key), toolbox, settings.base_time)
     else:
-        error = ".env에 ANTHROPIC_API_KEY가 없습니다 (.env.example 참고)"
+        error = ".env에 ANTHROPIC_API_KEY가 없습니다. .env.example을 복사해 키를 넣어주세요."
     MaterialApp(root, agent, settings, error).pack(fill="both", expand=True)
     root.mainloop()
 

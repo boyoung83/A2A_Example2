@@ -76,13 +76,14 @@ def test_send_runs_turn_and_renders(root):
     app._drain()
     assert agent.asked == ["오전 9시야"] and agent.limits == [16]
     parent = app.tool_tree.get_children()[0]
-    assert app.tool_tree.item(parent, "text") == "질문 1 · 도구 4/16회"
+    assert app.tool_tree.item(parent, "text") == "질문 1   도구 4/16회"
     assert len(app.tool_tree.get_children(parent)) == 4
     text = chat_text(app)
     assert [b.text for b in app.user_bubbles] == ["오전 9시야"] and "생산 불가입니다" in text
     assert "[판정 불가] 자재 기준 판정" in text
-    badge = app.verdict_badges[-1]
-    assert badge["text"].strip() == "불가" and badge["bg"] == "#DC2626"
+    card = app.verdict_cards[-1]
+    assert card.status == "불가" and card.lit == "red"
+    assert card.status_label["text"] == "불가" and card.status_label["fg"] == "#D63A2F"
     assert "자재 기준 판단" in text and not app.busy
 
 
@@ -105,7 +106,7 @@ def test_no_card_for_simple_answer(root):
     app.entry.insert(0, "센서 B 재고만 알려줘")
     app.send()
     app._drain()
-    assert "[판정" not in chat_text(app) and app.verdict_badges == []
+    assert "[판정" not in chat_text(app) and app.verdict_cards == []
 
 
 def test_error_row_tagged(root):
@@ -190,7 +191,7 @@ def test_markdown_bold_rendered_without_stars(root):
 
 def test_api_status_shown_in_header(root):
     app = make_app(root, FakeAgent())
-    assert "Claude API 연결 준비됨" in app.status_label["text"]
+    assert "API 연결됨" in app.status_label["text"]
 
 
 def test_user_bubble_right_aligned_and_distinct(root):
@@ -209,3 +210,41 @@ def test_agent_blank_lines_collapsed(root):
     app = make_app(root, FakeAgent())
     app._append_message("에이전트", "첫 줄\n\n\n둘째 줄", "agent")
     assert "첫 줄\n둘째 줄" in chat_text(app)
+
+
+@pytest.mark.parametrize("status,lit", [("가능", "green"), ("조건부 가능", "amber"), ("불가", "red"), ("확인 불가", None)])
+def test_andon_lamp_matches_status(root, status, lit):
+    from material_agent.verdict import PartRow, Verdict
+    app = make_app(root, FakeAgent())
+    row = PartRow("BRG-A", "베어링 A", 40, 30, 0, 10, 10, status == "확인 불가")
+    app._render_verdict(Verdict(status, [row]))
+    assert app.verdict_cards[-1].lit == lit
+
+
+def test_tool_rows_numbered_in_order(root):
+    app = make_app(root, FakeAgent())
+    app._start_turn_group(1)
+    for part in ("BRG-A", "SNS-B"):
+        app._on_tool_call(1, ToolCall("get_inventory", {"part_code": part}, True,
+                                      {"found": True, "current_stock": 1, "unit": "개"}))
+    rows = app.tool_tree.get_children(app.tool_tree.get_children()[0])
+    assert [app.tool_tree.item(r, "text")[0] for r in rows] == ["①", "②"]
+
+
+def test_tool_row_args_are_short():
+    from app import _fmt_args
+    assert _fmt_args({"part_code": "BRG-A", "production_start": "2026-10-16T09:00:00+09:00"}) == "BRG-A, 10/16 09:00 시작"
+    assert _fmt_args({"part_code": "SNS-B", "production_qty": 20, "qty_per_unit": 1,
+                      "current_stock": 25, "inbound_before_start": 0}, "calculate_shortage") == "SNS-B, 20개"
+
+
+def test_andon_tower_is_compact(root):
+    from material_agent.verdict import PartRow, Verdict
+    app = make_app(root, FakeAgent())
+    app._render_verdict(Verdict("불가", [PartRow("BRG-A", "베어링 A", 40, 30, 0, 10, 10, False)]))
+    assert int(app.verdict_cards[-1].tower["height"]) <= 120
+
+
+def test_entry_has_placeholder_until_focus(root):
+    app = make_app(root, FakeAgent(TurnResult("x", [])))
+    assert app.entry.get() == "" and app.placeholder.winfo_manager() != ""
