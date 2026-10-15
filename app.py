@@ -612,6 +612,9 @@ class MaterialApp(tk.Frame):
 
     # ---------- 화면 갱신 ----------
     def _start_turn_group(self, n: int) -> None:
+        # 앞 질문들의 조회 순서는 접고 새 질문만 펼친다 (▷를 누르면 다시 펼쳐짐)
+        for group in self._groups.values():
+            self.tool_tree.item(group["id"], open=False)
         limit = int(self.limit_var.get())
         parent = self.tool_tree.insert("", "end", text=f"질문 {n}   도구 0/{limit}회", open=True, tags=("group",))
         self._groups[n] = {"id": parent, "limit": limit, "count": 0}

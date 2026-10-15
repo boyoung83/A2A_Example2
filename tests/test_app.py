@@ -384,3 +384,13 @@ def test_detail_area_is_separate_region(root):
     assert app.detail_title["text"] == "도구별 세부내용 조회"
     assert app.detail_panel.is_rounded and app.detail_panel.fill == app_module.DETAIL_BG
     assert app.detail["bg"] == app_module.DETAIL_BG != app_module.SURFACE
+
+
+def test_previous_turn_groups_collapse(root):
+    app = make_app(root, FakeAgent())
+    call = ToolCall("get_inventory", {"part_code": "BRG-A"}, True, {"found": True, "current_stock": 30, "unit": "개"})
+    for n in (1, 2, 3):
+        app._start_turn_group(n)
+        app._on_tool_call(n, call)
+    groups = app.tool_tree.get_children()
+    assert [bool(app.tool_tree.item(g, "open")) for g in groups] == [False, False, True]
