@@ -6,6 +6,10 @@
 - 부족량은 반드시 계산 도구로 구합니다. 생산 시작 시각이 없어 입고 반영 여부를 판단할 수 없으면 사용자에게 묻습니다.
 - 실행한 도구와 결과를 화면에 그대로 보여줍니다. 도구 실행은 질문 한 건당 최대 16회(앱에서 8회로 변경 가능)입니다.
 
+![데모: 재고 조회 → 시작 시각 질문 → 오전 9시 불가 → 입고 조회 실패 시 확인 불가](docs/images/demo.gif)
+
+데모(24초, 실제 API 실행 화면): 센서 B 재고 → P-100 20개 생산 가능 여부 → 시작 시각을 되물음 → "오전 9시야" → 빨간 등 **불가**. 이어서 새 대화에서 입고 조회 실패 모드를 켜고 오후 4시 생산을 물으면 등이 모두 꺼진 **확인 불가**.
+
 ![대화 2: 시작 시각을 묻고 오전 9시 기준으로 판정](docs/images/app_9am.png)
 
 ## 설치
@@ -62,7 +66,7 @@ python app.py
 ## 검증
 
 - 질문 모음 9개와 대화 시나리오 5개를 실제 API로 실행해 기대 결과와 대조했습니다: [docs/검증/시나리오_검증.md](docs/검증/시나리오_검증.md) — 13개 시나리오 모두 통과
-- 다시 실행: `python scripts/run_scenarios.py` (실제 API 비용 발생), README 화면 다시 찍기: `python scripts/capture_screens.py`
+- 다시 실행: `python scripts/run_scenarios.py` (실제 API 비용 발생), README 화면 다시 찍기: `python scripts/capture_screens.py`, 데모 GIF 다시 만들기: `python scripts/record_demo.py`
 
 ## 테스트
 
