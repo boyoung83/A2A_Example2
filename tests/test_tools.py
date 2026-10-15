@@ -71,7 +71,8 @@ def test_inbound_bad_or_past_start_is_error(tb):
 def test_inbound_fail_mode(tb):
     tb.inbound_fails = True
     out = tb.run("get_inbound_schedule", {"part_code": "BRG-A"})
-    assert out == ToolOutcome(False, {"error": "입고 예정 조회 실패: 입고 시스템 응답 없음"})
+    assert out == ToolOutcome(False, {"error": "입고 예정 조회 실패: 입고 시스템 응답 없음", "lookup_failed": True,
+                                      "part_code": "BRG-A"})
 
 
 def test_shortage_formula(tb):
@@ -104,3 +105,29 @@ def test_run_missing_argument(tb):
 def test_schemas_are_strict():
     assert {s["name"] for s in TOOL_SCHEMAS} == {"get_bom", "get_inventory", "get_inbound_schedule", "calculate_shortage"}
     assert all(s["strict"] and s["input_schema"]["additionalProperties"] is False for s in TOOL_SCHEMAS)
+
+
+@pytest.mark.parametrize("name", ["베어링 A", "베어링A", "brg a", "BRG-A"])
+def test_inbound_accepts_part_name_variants(tb, name):
+    r = tb.get_inbound_schedule(name, "2026-10-16T16:00:00+09:00")
+    assert r["part_code"] == "BRG-A" and r["inbound_before_start_total"] == 20
+
+
+def test_inbound_unknown_part_is_error_not_empty(tb):
+    out = tb.run("get_inbound_schedule", {"part_code": "ZZZ-9", "production_start": None})
+    assert not out.ok and "등록되지 않은 부품" in out.payload["error"]
+
+
+def test_inventory_hyphen_space_variant(tb):
+    assert tb.get_inventory("SNS B")["part_code"] == "SNS-B"
+
+
+def test_shortage_part_name_resolved(tb):
+    assert tb.calculate_shortage("베어링 A", 20, 2, 30, 0)["part_code"] == "BRG-A"
+
+
+def test_lookup_failure_flagged_but_bad_input_not(tb):
+    bad = tb.run("get_inbound_schedule", {"part_code": "BRG-A", "production_start": "내일 오후"})
+    assert not bad.ok and not bad.payload.get("lookup_failed")
+    tb.inbound_fails = True
+    assert tb.run("get_inbound_schedule", {"part_code": "BRG-A", "production_start": None}).payload["lookup_failed"] is True

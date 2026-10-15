@@ -35,22 +35,32 @@ def build_verdict(turn_calls: list[ToolCall], bom_parts: list[dict] | None,
         return None
     last_calc = {c.payload["part_code"]: c.payload
                  for c in turn_calls if c.name == "calculate_shortage" and c.ok}
-    inbound_state: dict[str, str] = {}  # 부품 → "ok" | "error"
-    for c in conversation_calls if conversation_calls is not None else turn_calls:
-        if c.name != "get_inbound_schedule":
-            continue
-        part = _code(c.args.get("part_code", ""))
-        if not c.ok:
-            inbound_state[part] = "error"
-        elif c.args.get("production_start"):
-            inbound_state[part] = "ok"
-    inbound_ok = {p for p, s in inbound_state.items() if s == "ok"}
-    inbound_err = {p for p, s in inbound_state.items() if s == "error"}
+    history = conversation_calls if conversation_calls is not None else turn_calls
+    inbound_total: dict[str, int | None] = {}  # 부품 → 마지막 입고 조회의 시작 전 합계 (조회 실패면 None)
+    stock: dict[str, int] = {}  # 부품 → 마지막 재고 조회 값
+    for c in history:
+        if c.name == "get_inbound_schedule":
+            if c.ok and c.args.get("production_start"):
+                inbound_total[c.payload["part_code"]] = c.payload["inbound_before_start_total"]
+            elif not c.ok and c.payload.get("lookup_failed"):
+                inbound_total[c.payload.get("part_code") or _code(c.args.get("part_code", ""))] = None
+        elif c.name == "get_inventory" and c.ok and c.payload.get("found"):
+            stock[c.payload["part_code"]] = c.payload["current_stock"]
+    inbound_ok = {p for p, t in inbound_total.items() if t is not None}
+    inbound_err = {p for p, t in inbound_total.items() if t is None}
 
     rows = []
     for part in bom_parts:
         calc = last_calc.get(part["part_code"])
         if calc is None:
+            return None
+        # Claude가 계산 도구에 넣은 값이 실제 조회 결과와 다르면 카드를 만들지 않는다
+        if calc["qty_per_unit"] != part["qty_per_unit"]:
+            return None
+        if part["part_code"] in stock and calc["current_stock"] != stock[part["part_code"]]:
+            return None
+        if (calc["shortage_now"] > 0 and part["part_code"] in inbound_ok
+                and calc["inbound_before_start"] != inbound_total[part["part_code"]]):
             return None
         if calc["shortage_now"] > 0 and part["part_code"] not in inbound_ok | inbound_err:
             return None  # 부족한 부품의 시작 시각 기준 입고 확인이 없음

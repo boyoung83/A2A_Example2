@@ -11,6 +11,10 @@ BAD_QTY_MESSAGE = "생산 수량은 양의 정수여야 합니다"
 class InboundLookupError(Exception):
     """입고 예정 조회 자체가 실패함 (입고 예정이 없는 것과 다름)."""
 
+    def __init__(self, message: str, part_code: str):
+        super().__init__(message)
+        self.part_code = part_code
+
 
 @dataclass(frozen=True)
 class ToolOutcome:
@@ -23,7 +27,8 @@ def _code(text: str) -> str:
 
 
 def _squash(text: str) -> str:
-    return "".join(str(text).split()).upper()
+    """비교용: 공백·하이픈을 없애고 대문자로 ("센서 B" == "센서B", "SNS B" == "SNS-B")."""
+    return "".join(str(text).split()).replace("-", "").upper()
 
 
 def _is_int(value) -> bool:
@@ -45,18 +50,29 @@ class ToolBox:
                  for r in rows]
         return {"product_code": code, "found": True, "parts": parts}
 
-    def get_inventory(self, part_code: str) -> dict:
+    def _find_part(self, part_code: str):
+        """부품코드 또는 부품명으로 재고 행을 찾는다. 없으면 None."""
         key = _squash(part_code)
-        for r in self.dataset.inventory:
-            if key in (_squash(r.part_code), _squash(r.part_name)):
-                return {"found": True, "part_code": r.part_code, "part_name": r.part_name,
-                        "current_stock": r.current_stock, "unit": r.unit}
-        return {"found": False, "query": str(part_code), "message": "등록되지 않은 부품입니다"}
+        return next((r for r in self.dataset.inventory if key in (_squash(r.part_code), _squash(r.part_name))), None)
+
+    def _require_part(self, part_code: str) -> str:
+        row = self._find_part(part_code)
+        if row is None:
+            raise ValueError(f"등록되지 않은 부품입니다: {part_code}")
+        return row.part_code
+
+    def get_inventory(self, part_code: str) -> dict:
+        r = self._find_part(part_code)
+        if r is None:
+            return {"found": False, "query": str(part_code), "message": "등록되지 않은 부품입니다"}
+        return {"found": True, "part_code": r.part_code, "part_name": r.part_name,
+                "current_stock": r.current_stock, "unit": r.unit}
 
     def get_inbound_schedule(self, part_code: str, production_start: str | None = None) -> dict:
+        # 부품명이 와도 같은 부품으로 조회한다. 모르는 부품은 "입고 예정 없음"(빈 배열)이 아니라 오류
+        code = self._require_part(part_code)
         if self.inbound_fails:
-            raise InboundLookupError(INBOUND_FAIL_MESSAGE)
-        code = _code(part_code)
+            raise InboundLookupError(INBOUND_FAIL_MESSAGE, code)
         rows = sorted((r for r in self.dataset.inbound if r.part_code == code), key=lambda r: r.arrival)
         schedule = [{"inbound_id": r.inbound_id, "arrival": r.arrival.isoformat(), "qty": r.qty} for r in rows]
         result = {"part_code": code, "schedule": schedule}
@@ -86,7 +102,7 @@ class ToolBox:
             if not _is_int(value) or value < 0:
                 raise ValueError(f"{name}은(는) 0 이상의 정수여야 합니다")
         required = production_qty * qty_per_unit
-        return {"part_code": _code(part_code), "production_qty": production_qty, "qty_per_unit": qty_per_unit,
+        return {"part_code": self._require_part(part_code), "production_qty": production_qty, "qty_per_unit": qty_per_unit,
                 "required": required, "current_stock": current_stock, "inbound_before_start": inbound_before_start,
                 "shortage_now": max(0, required - current_stock),
                 "shortage_at_start": max(0, required - current_stock - inbound_before_start)}
@@ -100,7 +116,10 @@ class ToolBox:
             return ToolOutcome(False, {"error": f"알 수 없는 도구입니다: {name}"})
         try:
             return ToolOutcome(True, handler(**args))
-        except (InboundLookupError, ValueError) as e:
+        except InboundLookupError as e:
+            # 조회 자체의 실패만 lookup_failed로 표시한다 (잘못된 입력과 구분)
+            return ToolOutcome(False, {"error": str(e), "lookup_failed": True, "part_code": e.part_code})
+        except ValueError as e:
             return ToolOutcome(False, {"error": str(e)})
         except TypeError as e:
             return ToolOutcome(False, {"error": f"도구 입력값이 올바르지 않습니다: {e}"})
