@@ -366,3 +366,13 @@ def test_scrollbars_hide_when_content_fits(root):
     root.update()
     assert not app.detail_scroll.winfo_ismapped()
     root.withdraw()
+
+
+def test_detail_hint_explains_clicking_a_step(root):
+    import app as app_module
+    app = make_app(root, FakeAgent())
+    hint = app.detail.get("1.0", "end").strip()
+    assert hint == app_module.DETAIL_HINT and "단계" in hint and "누르면" in hint
+    assert "hint" in app.detail.tag_names("1.0")  # 안내문은 본문 글꼴(①②③이 깨지지 않게)
+    app.new_conversation()
+    assert app.detail.get("1.0", "end").strip() == app_module.DETAIL_HINT

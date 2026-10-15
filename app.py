@@ -43,6 +43,8 @@ CHAT_MUTED = "#4B5563"
 BUBBLE_WRAP = 460
 LIMIT_CHOICES = ("16", "8")
 CIRCLED = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳"
+DETAIL_HINT = ("위 조회 순서에서 ①②③ 단계를 누르면\n"
+               "그 도구에 보낸 입력값과 돌려받은 결과를 자세히 볼 수 있습니다.")
 
 
 def color_distance(a: str, b: str) -> float:
@@ -72,7 +74,7 @@ class Fonts:
         self.figure = (sign, 13, "bold")
         self.figure_small = (sign, 10)
         self.sign = (sign, 10, "bold")
-        self.mono = (mono, 9)
+        self.mono = (mono, 10)
 
 
 def _round_rect(canvas, x1, y1, x2, y2, r, **kw):
@@ -516,7 +518,7 @@ class MaterialApp(tk.Frame):
                                            style="Slim.Vertical.TScrollbar")
         self.detail.pack(side="left", fill="both", expand=True)
         self.detail.configure(yscrollcommand=_autohide(self.detail_scroll, self.detail))
-        self._set_text(self.detail, "선택한 단계의 입력과 결과가 여기에 표시됩니다.")
+        self._show_hint()
 
     def _configure_chat_tags(self):
         """말풍선 줄 정렬과 가운데 알림 스타일. 말풍선 자체는 위젯으로 그린다."""
@@ -570,7 +572,7 @@ class MaterialApp(tk.Frame):
         self._groups.clear()
         self._details.clear()
         self.tool_tree.delete(*self.tool_tree.get_children())
-        self._set_text(self.detail, "선택한 단계의 입력과 결과가 여기에 표시됩니다.")
+        self._show_hint()
         self.chat.configure(state="normal")
         self.chat.delete("1.0", "end")
         self.chat.configure(state="disabled")
@@ -658,12 +660,18 @@ class MaterialApp(tk.Frame):
         selected = self.tool_tree.selection()
         call = self._details.get(selected[0]) if selected else None
         if call is None:
-            self._set_text(self.detail, "선택한 단계의 입력과 결과가 여기에 표시됩니다.")
+            self._show_hint()
             return
         body = (f"{call.name} ({'성공' if call.ok else '오류'})\n\n입력\n"
                 f"{json.dumps(call.args, ensure_ascii=False, indent=2)}\n\n결과\n"
                 f"{json.dumps(call.payload, ensure_ascii=False, indent=2)}")
         self._set_text(self.detail, body)
+
+    def _show_hint(self) -> None:
+        """원문 칸 안내문: 코드용 고정폭 글꼴 대신 본문 글꼴로 (①②③이 작게 깨지지 않게)."""
+        self._set_text(self.detail, DETAIL_HINT)
+        self.detail.tag_configure("hint", font=self.fonts.body, foreground=MUTED, spacing2=4)
+        self.detail.tag_add("hint", "1.0", "end")
 
     def _set_busy(self, busy: bool) -> None:
         self.busy = busy
