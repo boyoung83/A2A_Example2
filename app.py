@@ -45,6 +45,13 @@ LIMIT_CHOICES = ("16", "8")
 CIRCLED = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳"
 
 
+def color_distance(a: str, b: str) -> float:
+    """두 #RRGGBB 색의 RGB 거리 (스크롤바가 배경과 얼마나 가까운지 확인용)."""
+    ca = [int(a[i:i + 2], 16) for i in (1, 3, 5)]
+    cb = [int(b[i:i + 2], 16) for i in (1, 3, 5)]
+    return sum((x - y) ** 2 for x, y in zip(ca, cb)) ** 0.5
+
+
 class Fonts:
     def __init__(self, root: tk.Misc):
         families = set(tkfont.families(root))
@@ -246,12 +253,16 @@ class MaterialApp(tk.Frame):
         style.configure("Trace.Treeview", background=SURFACE, fieldbackground=SURFACE, foreground=TEXT,
                         bordercolor=SURFACE, rowheight=30, font=f.body, indent=14)
         style.map("Trace.Treeview", background=[("selected", FLOOR)], foreground=[("selected", TEXT)])
-        style.layout("Slim.Vertical.TScrollbar",
-                     [("Vertical.Scrollbar.trough", {"sticky": "ns",
-                       "children": [("Vertical.Scrollbar.thumb", {"expand": "1", "sticky": "nswe"})]})])
-        style.configure("Slim.Vertical.TScrollbar", troughcolor=SURFACE, background="#C4CBD3",
-                        bordercolor=SURFACE, lightcolor="#C4CBD3", darkcolor="#C4CBD3", width=8)
-        style.map("Slim.Vertical.TScrollbar", background=[("active", FAINT)])
+        # 스크롤바: Tk는 투명도를 지원하지 않으므로 막대를 배경과 거의 같은 옅은 색·좁은 폭으로 그려
+        # 투명해 보이게 하고, 마우스를 올렸을 때만 진하게 한다. (흰 영역용 Slim, 하늘색 대화창용 Chat)
+        for name, trough, thumb, active in (("Slim.Vertical.TScrollbar", SURFACE, "#E8EBEF", "#B9C1CA"),
+                                            ("Chat.Vertical.TScrollbar", CHAT_BG, "#C4D4E3", "#8FA9C2")):
+            style.layout(name, [("Vertical.Scrollbar.trough", {"sticky": "ns", "children": [
+                ("Vertical.Scrollbar.thumb", {"expand": "1", "sticky": "nswe"})]})])
+            style.configure(name, troughcolor=trough, background=thumb, bordercolor=trough,
+                            lightcolor=thumb, darkcolor=thumb, width=6)
+            style.map(name, background=[("active", active)], lightcolor=[("active", active)],
+                      darkcolor=[("active", active)])
 
     def _build_header(self):
         f = self.fonts
@@ -334,7 +345,7 @@ class MaterialApp(tk.Frame):
 
         self.chat = tk.Text(left, wrap="word", font=f.chat, state="disabled", padx=14, pady=14,
                             bg=CHAT_BG, fg=TEXT, relief="flat", highlightthickness=0, cursor="arrow")
-        scroll = ttk.Scrollbar(left, command=self.chat.yview, style="Slim.Vertical.TScrollbar")
+        scroll = ttk.Scrollbar(left, command=self.chat.yview, style="Chat.Vertical.TScrollbar")
         self.chat.configure(yscrollcommand=scroll.set)
         scroll.pack(side="right", fill="y")
         self.chat.pack(side="left", fill="both", expand=True)
@@ -347,8 +358,12 @@ class MaterialApp(tk.Frame):
         tk.Label(right, text="Claude가 고른 도구가 실행된 순서입니다. 줄을 누르면 아래에 입력과 결과가 보입니다.",
                  bg=SURFACE, fg=MUTED, font=f.small, wraplength=420, justify="left").pack(anchor="w", padx=18,
                                                                                          pady=(2, 8))
-        tree_box = tk.Frame(right, bg=SURFACE)
-        tree_box.pack(fill="both", expand=True, padx=10)
+        # 조회 순서(위)와 원문(아래)은 가운데 경계선을 끌어 높이를 조절한다
+        self.right_panes = tk.PanedWindow(right, orient="vertical", bg=RULE, bd=0, sashwidth=6,
+                                          sashrelief="flat", sashcursor="sb_v_double_arrow", showhandle=False)
+        self.right_panes.pack(fill="both", expand=True)
+        tree_box = tk.Frame(self.right_panes, bg=SURFACE, padx=0)  # 스크롤바를 오른쪽 끝에 붙여 아래 원문 칸과 맞춘다
+        self.right_panes.add(tree_box, minsize=120, stretch="always", height=380)
         self.tool_tree = ttk.Treeview(tree_box, show="tree", selectmode="browse", style="Trace.Treeview")
         tree_scroll = ttk.Scrollbar(tree_box, command=self.tool_tree.yview, style="Slim.Vertical.TScrollbar")
         self.tool_tree.configure(yscrollcommand=tree_scroll.set)
@@ -358,10 +373,15 @@ class MaterialApp(tk.Frame):
         self.tool_tree.tag_configure("group", font=f.small_bold, foreground=MUTED)
         self.tool_tree.bind("<<TreeviewSelect>>", lambda _e: self._show_detail())
 
-        tk.Frame(right, bg=RULE, height=1).pack(fill="x", pady=(8, 0))
-        self.detail = tk.Text(right, wrap="none", font=f.mono, height=9, state="disabled", bg=SURFACE,
+        detail_box = tk.Frame(self.right_panes, bg=SURFACE)
+        self.right_panes.add(detail_box, minsize=100, stretch="always")
+        self.detail = tk.Text(detail_box, wrap="none", font=f.mono, height=9, state="disabled", bg=SURFACE,
                               fg=TEXT, relief="flat", padx=18, pady=10)
-        self.detail.pack(fill="x")
+        self.detail_scroll = ttk.Scrollbar(detail_box, orient="vertical", command=self.detail.yview,
+                                           style="Slim.Vertical.TScrollbar")
+        self.detail.configure(yscrollcommand=self.detail_scroll.set)
+        self.detail_scroll.pack(side="right", fill="y")
+        self.detail.pack(side="left", fill="both", expand=True)
         self._set_text(self.detail, "선택한 단계의 입력과 결과가 여기에 표시됩니다.")
 
     def _configure_chat_tags(self):

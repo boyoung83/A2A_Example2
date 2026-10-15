@@ -1,5 +1,6 @@
 """tkinter 데모 앱 테스트 — 가짜 에이전트 사용."""
 import tkinter as tk
+from tkinter import ttk
 
 import pytest
 
@@ -260,3 +261,49 @@ def test_agent_lines_separated_by_blank_line(root):
     assert gap >= tkfont.Font(font=app.fonts.chat).metrics("linespace") * 0.8
     app._append_message("나", "오전 9시야", "user")
     assert app.user_bubbles[-1].line_gap < app.agent_bubbles[-1].line_gap
+
+
+def test_trace_and_detail_split_is_resizable(root):
+    app = make_app(root, FakeAgent())
+    panes = app.right_panes
+    assert str(panes["orient"]) == "vertical" and len(panes.panes()) == 2
+
+
+def test_detail_has_vertical_scrollbar(root):
+    app = make_app(root, FakeAgent())
+    assert str(app.detail_scroll["orient"]) == "vertical"
+    assert app.detail["yscrollcommand"] != ""
+    assert app.detail.pack_info()["expand"] in (1, True, "1")
+
+
+def test_right_scrollbars_aligned(root):
+    app = make_app(root, FakeAgent())
+    app.pack(fill="both", expand=True)
+    root.deiconify()
+    root.geometry("1400x880")
+    root.update()
+    assert app.detail_scroll.winfo_ismapped() and app.detail_scroll.winfo_width() > 1
+    tree_sb = [w for w in app.tool_tree.master.winfo_children() if isinstance(w, ttk.Scrollbar)][0]
+    right_edge = lambda w: w.winfo_rootx() + w.winfo_width()
+    assert right_edge(tree_sb) == right_edge(app.detail_scroll)
+    assert tree_sb.winfo_rootx() == app.detail_scroll.winfo_rootx()
+    root.withdraw()
+
+
+def test_scrollbars_are_faint(root):
+    import app as app_module
+    app = make_app(root, FakeAgent())
+    style = ttk.Style(app)
+    for name, trough in (("Slim.Vertical.TScrollbar", app_module.SURFACE),
+                                          ("Chat.Vertical.TScrollbar", app_module.CHAT_BG)):
+        thumb = style.lookup(name, "background")
+        assert style.lookup(name, "troughcolor") == trough
+        assert app_module.color_distance(thumb, trough) < 40   # 배경과 거의 같은 옅은 막대
+        assert int(style.lookup(name, "width")) <= 6
+
+
+
+def test_chat_uses_chat_scrollbar_style(root):
+    app = make_app(root, FakeAgent())
+    chat_sb = [w for w in app.chat.master.winfo_children() if isinstance(w, ttk.Scrollbar)][0]
+    assert str(chat_sb["style"]) == "Chat.Vertical.TScrollbar"
