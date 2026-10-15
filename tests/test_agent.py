@@ -101,3 +101,8 @@ def test_reset_clears(agent_with):
     agent.ask("q", 16)
     agent.reset()
     assert agent.messages == [] and agent.last_bom is None
+
+
+def test_system_prompt_asks_for_plain_text(agent_with):
+    agent, _ = agent_with()
+    assert "마크다운" in agent.system and "표" in agent.system

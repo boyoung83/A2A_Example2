@@ -79,7 +79,9 @@ def test_send_runs_turn_and_renders(root):
     assert app.tool_tree.item(parent, "text") == "질문 1 · 도구 4/16회"
     assert len(app.tool_tree.get_children(parent)) == 4
     text = chat_text(app)
-    assert "오전 9시야" in text and "생산 불가입니다" in text and "판정: 불가" in text
+    assert "오전 9시야" in text and "생산 불가입니다" in text and " 불가   자재 기준 판정" in text
+    badge = app.chat.search(" 불가 ", "1.0")
+    assert "badge:불가" in app.chat.tag_names(badge)
     assert "자재 기준 판단" in text and not app.busy
 
 
@@ -171,3 +173,20 @@ def test_no_api_key_disables_send(root):
     app = MaterialApp(root, None, load_settings(), startup_error=".env에 ANTHROPIC_API_KEY가 없습니다")
     assert "ANTHROPIC_API_KEY" in chat_text(app)
     assert str(app.send_button["state"]) == "disabled"
+
+
+def test_markdown_bold_rendered_without_stars(root):
+    agent = FakeAgent(TurnResult("**결론: 불가**입니다", []))
+    app = make_app(root, agent)
+    app.entry.insert(0, "q")
+    app.send()
+    app._drain()
+    text = chat_text(app)
+    assert "결론: 불가입니다" in text and "**" not in text
+    start = app.chat.search("결론", "1.0")
+    assert "bold" in app.chat.tag_names(start)
+
+
+def test_api_status_shown_in_header(root):
+    app = make_app(root, FakeAgent())
+    assert "Claude API 연결 준비됨" in app.status_label["text"]
